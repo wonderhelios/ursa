@@ -1,0 +1,19 @@
+[package]
+name = "ursa"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ursa"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ursa-core = { path = "../core" }
+ursa-llm = { path = "../llm" }
+ursa-tools = { path = "../tools" }
+ursa-services = { path = "../services" }

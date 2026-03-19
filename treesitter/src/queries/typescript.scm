@@ -1,0 +1,1 @@
+; TypeScript Tree-sitter queries
