@@ -1,3 +1,4 @@
+pub mod bash;
 pub mod execute;
 pub mod list_dir;
 pub mod memory_search;

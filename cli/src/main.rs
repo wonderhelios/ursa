@@ -6,6 +6,7 @@ mod config;
 use std::io::Write;
 use std::sync::Arc;
 use tracing::info;
+use ursa_tools::registry;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,8 +17,8 @@ async fn main() -> anyhow::Result<()> {
         ursa_llm::models::openai::OpenAIConfig::from_env().expect("URSA_LLM_API_KEY not set");
 
     let llm = Arc::new(ursa_llm::models::openai::OpenAIProvider::new(config));
-    let tools: Vec<Box<dyn ursa_tools::Tool>> = vec![Box::new(ursa_tools::BashTool)];
-    let engine = ursa_core::pipeline::engine::PipelineEngine::new(llm, tools);
+    let registry = ursa_tools::ToolRegistry::with_defaults();
+    let engine = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry);
 
     println!("Ursa Agent - type 'quit' to exit\n");
 

@@ -5,16 +5,17 @@ use tracing::{debug, field::debug, info, warn};
 
 use ursa_llm::provider::{ChatRequest, ChatResponse, LLMProvider, Message, Role, ToolCall};
 use ursa_tools::{Tool, ToolDefinition, tools};
+use ursa_tools::{ToolRegistry, registry};
 
 pub struct PipelineEngine {
     llm: Arc<dyn LLMProvider>,
-    tools: Vec<Box<dyn Tool>>,
+    registry: ToolRegistry,
 }
 
 impl PipelineEngine {
-    pub fn new(llm: Arc<dyn LLMProvider>, tools: Vec<Box<dyn Tool>>) -> Self {
-        info!("PiplineEngine created with {} tools", tools.len());
-        Self { llm, tools }
+    pub fn new(llm: Arc<dyn LLMProvider>, registry: ToolRegistry) -> Self {
+        info!("PiplineEngine created with {} tools", registry.all().len());
+        Self { llm, registry }
     }
 
     pub async fn run(&self, user_input: &str) -> anyhow::Result<String> {
@@ -27,10 +28,25 @@ impl PipelineEngine {
             tool_call_id: None,
         }];
 
-        let tools_json = if self.tools.is_empty() {
-            None
-        } else {
-            Some(self.build_tools_schema())
+        let tools_json = {
+            let tools = self.registry.all();
+            if tools.is_empty() {
+                None
+            } else {
+                Some(
+                    tools
+                        .iter()
+                        .map(|t| {
+                            let def = t.definition();
+                            json!({"type":"function","function":{
+                                "name":def.name,
+                                "description":def.description,
+                                "parameters":def.parameters,
+                            }})
+                        })
+                        .collect(),
+                )
+            }
         };
 
         for iter in 0..10 {
@@ -81,30 +97,13 @@ impl PipelineEngine {
         Ok("Reach max iterations,please retry simpler request".to_string())
     }
 
-    fn build_tools_schema(&self) -> Vec<serde_json::Value> {
-        self.tools
-            .iter()
-            .map(|t| {
-                let def = t.definition();
-                json!({
-                    "type":"function",
-                    "function":{
-                        "name":def.name,
-                        "description":def.description,
-                        "parameters":def.parameters,
-                    }
-                })
-            })
-            .collect()
-    }
-
     async fn execute_tool(&self, tc: &ToolCall) -> String {
         let name = &tc.function.name;
         let args = &tc.function.arguments;
 
         info!("Executing tool: {} args: {}", name, args);
 
-        let tool = match self.tools.iter().find(|t| t.definition().name == *name) {
+        let tool = match self.registry.get(name) {
             Some(t) => t,
             None => {
                 let err = format!("Tool '{}' not found", name);
