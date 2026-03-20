@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+ursa-llm = { path = "../llm" }
+ursa-tools = { path = "../tools" }
 anyhow.workspace = true
 tokio.workspace = true
 serde.workspace = true

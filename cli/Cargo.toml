@@ -17,3 +17,6 @@ ursa-core = { path = "../core" }
 ursa-llm = { path = "../llm" }
 ursa-tools = { path = "../tools" }
 ursa-services = { path = "../services" }
+
+tracing-subscriber = "0.3"
+
