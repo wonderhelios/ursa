@@ -172,7 +172,6 @@ impl Tool for TodoWriteTool {
         mgr.update(items)?;
 
         let rendered = mgr.render();
-        println!("\n{}\n", rendered);
 
         Ok(format!("Todo list updated:\n{}", rendered))
     }

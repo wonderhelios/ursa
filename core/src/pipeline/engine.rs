@@ -99,9 +99,20 @@ impl PipelineEngine {
                         tool_call_id: None,
                     });
 
+                    // Print intermediate narration so user sees it in real time
+                    if !response.content.is_empty() {
+                        println!("{}", response.content);
+                    }
+
                     // Execute tools sequentially
                     for tc in tool_calls {
                         let result = self.execute_tool(tc).await;
+
+                        // Print todo_write results so the user sees task list updates
+                        if tc.function.name == "todo_write" {
+                            println!("{}", result);
+                        }
+
                         message.push(Message {
                             role: Role::Tool,
                             content: result,

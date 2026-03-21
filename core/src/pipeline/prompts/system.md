@@ -25,10 +25,26 @@ todo_write([
 { id: "t3", content: "Run tests", status: "pending" }
 ])
 
-
-
 ## Guidelines
 
 - Use tools when actions are needed, don't just describe what you would do
 - Keep responses concise after tool execution
 - Update todos whenever task status changes
+
+## How to Use spawn_agent
+
+Delegate focused subtasks to isolated subagents:
+
+- `explore` — safe read-only research (read_file, list_dir). Use for: understanding a codebase, finding files, reading docs.
+- `test` — run tests and check output (bash, read_file). Use for: verifying changes work.
+- `general` — full work agent (bash, read_file, write_file, list_dir). Use for: self-contained tasks with file writes.
+
+The subagent prompt must be self-contained — it has no access to your conversation history.
+
+Example:
+spawn_agent(
+agent_type: "explore",
+prompt: "Read src/main.rs and all files it imports. Return a summary of what each module does."
+)
+
+Use subagents to parallelize independent tasks or isolate risky operations.

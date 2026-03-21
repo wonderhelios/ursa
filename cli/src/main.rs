@@ -9,7 +9,9 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
     info!("Ursa starting");
 
     let config =
@@ -20,9 +22,10 @@ async fn main() -> anyhow::Result<()> {
     // Shared TodoManager: both the tool and the engine hold a reference
     let todo_manager = Arc::new(Mutex::new(ursa_tools::TodoManager::new()));
 
-    // Build registry with all 5 tools
+    // Build registry with all tools
     let mut registry = ursa_tools::ToolRegistry::with_defaults();
     registry.register(ursa_tools::TodoWriteTool::new(todo_manager.clone()));
+    registry.register(ursa_core::SpawnAgentTool::new(llm.clone()));
 
     let engine = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry)
         .with_todos(todo_manager.clone());
