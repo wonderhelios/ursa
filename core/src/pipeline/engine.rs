@@ -1,32 +1,54 @@
 // Pipeline engine - TPAR architecture
 use serde_json::json;
-use std::sync::Arc;
+use std::fmt::format;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, field::debug, info, warn};
 
 use ursa_llm::provider::{ChatRequest, ChatResponse, LLMProvider, Message, Role, ToolCall};
+use ursa_tools::{TodoManager, ToolRegistry};
 use ursa_tools::{Tool, ToolDefinition, tools};
-use ursa_tools::{ToolRegistry, registry};
 
 pub struct PipelineEngine {
     llm: Arc<dyn LLMProvider>,
     registry: ToolRegistry,
+    todo_manager: Option<Arc<Mutex<TodoManager>>>,
 }
 
 impl PipelineEngine {
     pub fn new(llm: Arc<dyn LLMProvider>, registry: ToolRegistry) -> Self {
         info!("PiplineEngine created with {} tools", registry.all().len());
-        Self { llm, registry }
+        Self {
+            llm,
+            registry,
+            todo_manager: None,
+        }
+    }
+
+    /// Attach a shared TodoManager for todo state injection and nag
+    pub fn with_todos(mut self, manager: Arc<Mutex<TodoManager>>) -> Self {
+        self.todo_manager = Some(manager);
+        self
     }
 
     pub async fn run(&self, user_input: &str) -> anyhow::Result<String> {
         info!("Pipeline start: {}", user_input);
 
-        let mut message = vec![Message {
-            role: Role::User,
-            content: user_input.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-        }];
+        // === System message (with optional todo state) ===
+        let system_content = self.build_system_content();
+        let mut message = vec![
+            Message {
+                role: Role::System,
+                content: system_content,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            Message {
+                role: Role::User,
+                content: user_input.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
 
         let tools_json = {
             let tools = self.registry.all();
@@ -38,10 +60,12 @@ impl PipelineEngine {
                         .iter()
                         .map(|t| {
                             let def = t.definition();
-                            json!({"type":"function","function":{
-                                "name":def.name,
-                                "description":def.description,
-                                "parameters":def.parameters,
+                            json!({
+                                "type":"function",
+                                "function":{
+                                    "name":def.name,
+                                    "description":def.description,
+                                    "parameters":def.parameters,
                             }})
                         })
                         .collect(),
@@ -49,7 +73,7 @@ impl PipelineEngine {
             }
         };
 
-        for iter in 0..10 {
+        for iter in 0..30 {
             debug!("Iteration {}", iter);
 
             let request = ChatRequest {
@@ -95,6 +119,37 @@ impl PipelineEngine {
 
         warn!("Max iterations reached");
         Ok("Reach max iterations,please retry simpler request".to_string())
+    }
+
+    /// Build system message content, injecting current todos if present
+    fn build_system_content(&self) -> String {
+        let base = include_str!("./prompts/system.md").to_string();
+
+        if let Some(mgr) = &self.todo_manager {
+            let mgr = mgr.lock().unwrap();
+            let rendered = mgr.render();
+            if !rendered.is_empty() {
+                return format!("{}\n\n## Current Task\n{}", base, rendered);
+            }
+        }
+        base
+    }
+
+    /// Build a nag reminder message if a todo is stuck in InProgress too long
+    fn build_nag_message(&self) -> Option<Message> {
+        let mgr = self.todo_manager.as_ref()?.lock().unwrap();
+        if !mgr.need_nag() {
+            return None;
+        }
+        Some(Message {
+            role: Role::User,
+            content: "Reminder: you have a task marked in_progress for over 5 minutes. \
+                Please update the todo list - mark it completed if done, \
+                or break it into smaller steps."
+                .to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        })
     }
 
     async fn execute_tool(&self, tc: &ToolCall) -> String {

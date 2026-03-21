@@ -27,4 +27,7 @@ pub use registry::ToolRegistry;
 pub use tools::bash::BashTool;
 pub use tools::list_dir::ListDirTool;
 pub use tools::read_file::ReadFileTool;
+pub use tools::todo_write::TodoItem;
+pub use tools::todo_write::TodoManager;
+pub use tools::todo_write::TodoWriteTool;
 pub use tools::write_file::WriteFileTool;
