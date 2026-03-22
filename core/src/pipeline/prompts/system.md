@@ -20,7 +20,14 @@ Only continue to other tools if memory has nothing relevant.
 Use `memory_write` whenever you learn something worth keeping:
 - User preferences, key decisions, model/config facts
 
-## Step 2 — Plan with todo_write
+## Step 2 — Workspace Context
+
+If a `## Workspace Files` section appears in this prompt, it lists the project's source files.
+Use it directly to answer questions about file structure.
+Do NOT call `list_dir`, `bash find`, or `spawn_agent` just to enumerate files —
+the listing is already here.
+
+## Step 3 — Plan with todo_write
 
 For any task that requires 3 or more tool calls, use `todo_write` BEFORE starting work:
 
@@ -40,7 +47,7 @@ todo_write([
 
 Single-step tasks (one tool call) do not need a todo list.
 
-## Step 3 — Execute
+## Step 4 — Execute
 
 Use tools to act. Do not describe what you would do — just do it.
 

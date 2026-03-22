@@ -6,6 +6,8 @@ mod config;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::info;
+use ursa_core::context::engine::ContextEngine;
+use ursa_core::runtime::session::{self, SessionManager};
 use ursa_services::bootstrap;
 use ursa_services::bootstrap::loader::BootstrapLoader;
 use ursa_services::memory::store::MemoryStore;
@@ -31,6 +33,12 @@ async fn main() -> anyhow::Result<()> {
     let memory_file = cwd.join(".ursa").join("memory.json");
     let memory_store = Arc::new(Mutex::new(MemoryStore::load(memory_file)?));
 
+    // session manager
+    let session_manager = Arc::new(SessionManager::new(cwd.join(".ursa").join("sessions")));
+
+    // context engine
+    let context_engine = Arc::new(ContextEngine::new(cwd.clone()));
+
     let config =
         ursa_llm::models::openai::OpenAIConfig::from_env().expect("URSA_LLM_API_KEY not set");
 
@@ -46,15 +54,48 @@ async fn main() -> anyhow::Result<()> {
     registry.register(ursa_tools::MemoryWriteTool::new(memory_store.clone()));
     registry.register(ursa_tools::MemorySearchTool::new(memory_store.clone()));
 
-    let engine = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry)
+    let mut engine_builder = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry)
         .with_todos(todo_manager.clone())
-        .with_memory(memory_store);
+        .with_memory(memory_store)
+        .with_context(context_engine);
+
+    if let Some(prompt) = system_prompt {
+        engine_builder = engine_builder.with_system_prompt(prompt);
+    }
+
+    // check for -- resume flag (resume most rencent session)
+    let resume_prefix = std::env::args().nth(1).filter(|a| a != "--help");
+    let initial_messages = if resume_prefix.as_deref() == Some("--resume") {
+        let prefix = std::env::args().nth(2);
+        match session_manager.load(prefix.as_deref()) {
+            Ok(Some(session)) => {
+                println!(
+                    "Resumed session: {} ({} messages)\n",
+                    session.id,
+                    session.messages.len()
+                );
+                session.messages
+            }
+            Ok(None) => {
+                println!("No session found to resume.\n");
+                vec![]
+            }
+            Err(e) => {
+                eprintln!("Failed to load session: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    let engine = engine_builder.with_session(session_manager.clone(), initial_messages);
 
     // load skills from .skills/ directory in cwd
     let mut skills = SkillsManager::new(std::path::PathBuf::from(".skills"));
     skills.load().await?;
 
-    println!("Ursa Agent - type '/skills' to list skills, 'quit' to exit\n");
+    println!("Ursa Agent - type '/help' for commands, 'quit' to exit\n");
 
     loop {
         print!("> ");
@@ -72,38 +113,63 @@ async fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        // skill invocation: /skill-name [context]
+        // built-in commands
         if let Some(rest) = input.strip_prefix('/') {
             let mut parts = rest.splitn(2, ' ');
-            let skill_name = parts.next().unwrap_or("").trim();
-            let context = parts.next().unwrap_or("").trim();
+            let cmd = parts.next().unwrap_or("").trim();
+            let arg = parts.next().unwrap_or("").trim();
 
-            // built-in /skills command
-            if skill_name == "skills" {
-                println!("\n{}\n", skills.render_list());
-                continue;
-            }
-
-            // look up skill
-            match skills.build_invocation(skill_name, context) {
-                Some(prompt) => {
-                    info!("Invoking skill: {}", skill_name);
-                    match engine.run(&prompt).await {
-                        Ok(resp) => println!("\n{}\n", resp),
-                        Err(e) => eprintln!("\nError: {}\n", e),
-                    }
-                }
-                None => {
+            match cmd {
+                "help" => {
+                    println!("\nCommands:");
+                    println!("  /skills          — list available skills");
+                    println!("  /history         — list saved sessions");
+                    println!("  /clear           — clear conversation history");
                     println!(
-                        "\nUnknown skill '{}'. Type /skills to see available skills.\n",
-                        skill_name
+                        "  /resume [id]     — not available mid-session; restart with --resume"
                     );
+                    println!("  quit / exit      — exit\n");
+                    continue;
+                }
+                "skills" => {
+                    println!("\n{}\n", skills.render_list());
+                    continue;
+                }
+                "history" => {
+                    let sessions = session_manager.list();
+                    if sessions.is_empty() {
+                        println!("\nNo saved sessions.\n");
+                    } else {
+                        println!("\nSaved sessions:");
+                        for s in sessions.iter().take(10) {
+                            println!("  {}", s);
+                        }
+                        println!();
+                    }
+                    continue;
+                }
+                "clear" => {
+                    engine.clear_conversation();
+                    println!("\nConversation history cleared.\n");
+                    continue;
+                }
+                _ => {
+                    // Try skill invocation
+                    match skills.build_invocation(cmd, arg) {
+                        Some(prompt) => match engine.run(&prompt).await {
+                            Ok(resp) => println!("\n{}\n", resp),
+                            Err(e) => eprintln!("\nError: {}\n", e),
+                        },
+                        None => {
+                            println!("\nUnknown command '/{}'. Type /help for help.\n", cmd);
+                        }
+                    }
+                    continue;
                 }
             }
-            continue;
         }
 
-        // normal conversation
+        // Normal conversation
         match engine.run(input).await {
             Ok(resp) => println!("\n{}\n", resp),
             Err(e) => eprintln!("\nError: {}\n", e),

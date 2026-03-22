@@ -8,12 +8,18 @@ use ursa_llm::provider::{ChatRequest, ChatResponse, LLMProvider, Message, Role, 
 use ursa_tools::{TodoManager, ToolRegistry};
 use ursa_tools::{Tool, ToolDefinition, tools};
 
+use crate::context::engine::{self, ContextEngine};
+use crate::runtime::session::{Session, SessionManager};
+
 pub struct PipelineEngine {
     llm: Arc<dyn LLMProvider>,
     registry: ToolRegistry,
     todo_manager: Option<Arc<Mutex<TodoManager>>>,
     system_prompt: Option<String>,
     memory_store: Option<Arc<Mutex<MemoryStore>>>,
+    conversation: Arc<Mutex<Vec<Message>>>,
+    session_manager: Option<Arc<SessionManager>>,
+    context_engine: Option<Arc<ContextEngine>>,
 }
 
 impl PipelineEngine {
@@ -25,6 +31,9 @@ impl PipelineEngine {
             todo_manager: None,
             system_prompt: None,
             memory_store: None,
+            conversation: Arc::new(Mutex::new(vec![])),
+            session_manager: None,
+            context_engine: None,
         }
     }
 
@@ -44,25 +53,45 @@ impl PipelineEngine {
         self
     }
 
+    pub fn with_session(mut self, manager: Arc<SessionManager>, existing: Vec<Message>) -> Self {
+        self.session_manager = Some(manager);
+        *self.conversation.lock().unwrap() = existing;
+        self
+    }
+
+    pub fn with_context(mut self, engine: Arc<ContextEngine>) -> Self {
+        self.context_engine = Some(engine);
+        self
+    }
+
+    pub fn clear_conversation(&self) {
+        self.conversation.lock().unwrap().clear();
+    }
+
     pub async fn run(&self, user_input: &str) -> anyhow::Result<String> {
         info!("Pipeline start: {}", user_input);
 
-        // === System message (with optional todo state) ===
         let system_content = self.build_system_content(user_input);
-        let mut message = vec![
-            Message {
-                role: Role::System,
-                content: system_content,
-                tool_calls: None,
-                tool_call_id: None,
-            },
-            Message {
-                role: Role::User,
-                content: user_input.to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-            },
-        ];
+
+        // messages: [System] + conversation history + [current User]
+        let mut messages = vec![Message {
+            role: Role::System,
+            content: system_content,
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+
+        {
+            let conv = self.conversation.lock().unwrap();
+            messages.extend(conv.clone());
+        }
+
+        messages.push(Message {
+            role: Role::User,
+            content: user_input.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
 
         let tools_json = {
             let tools = self.registry.all();
@@ -91,7 +120,7 @@ impl PipelineEngine {
             debug!("Iteration {}", iter);
 
             let request = ChatRequest {
-                messages: message.clone(),
+                messages: messages.clone(),
                 temperature: Some(0.3),
                 max_tokens: Some(4096),
                 tools: tools_json.clone(),
@@ -106,7 +135,7 @@ impl PipelineEngine {
                     info!("Tool calls: {}", tool_calls.len());
 
                     // asssistant message with tool_calls
-                    message.push(Message {
+                    messages.push(Message {
                         role: Role::Assistant,
                         content: response.content.clone(),
                         tool_calls: Some(tool_calls.clone()),
@@ -127,7 +156,7 @@ impl PipelineEngine {
                             println!("{}", result);
                         }
 
-                        message.push(Message {
+                        messages.push(Message {
                             role: Role::Tool,
                             content: result,
                             tool_calls: None,
@@ -137,7 +166,37 @@ impl PipelineEngine {
                 }
                 _ => {
                     info!("Done after {} iterations", iter + 1);
-                    return Ok(response.content);
+                    let final_response = response.content.clone();
+
+                    // append this exchange to conversation history
+                    {
+                        let mut cov = self.conversation.lock().unwrap();
+                        cov.push(Message {
+                            role: Role::User,
+                            content: user_input.to_string(),
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                        cov.push(Message {
+                            role: Role::Assistant,
+                            content: final_response.clone(),
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    }
+                    // save session if manager is configured
+                    if let Some(sm) = &self.session_manager {
+                        let conv = self.conversation.lock().unwrap();
+                        let session = Session {
+                            id: "current".to_string(),
+                            created_at: chrono::Utc::now(),
+                            messages: conv.clone(),
+                        };
+                        if let Err(e) = sm.save(&session) {
+                            warn!("Failed to save session: {}", e);
+                        }
+                    }
+                    return Ok(final_response);
                 }
             }
         }
@@ -154,7 +213,15 @@ impl PipelineEngine {
             .clone()
             .unwrap_or_else(|| include_str!("./prompts/system.md").to_string());
 
-        // 2. inject relevant memories
+        // 2. inject workspace file listing
+        if let Some(ctx) = &self.context_engine {
+            let workspace = ctx.build_context();
+            if !workspace.is_empty() {
+                content.push_str(&format!("\n\n{}", workspace));
+            }
+        }
+
+        // 3. inject relevant memories
         if let Some(store) = &self.memory_store {
             let store = store.lock().unwrap();
             let memories = store.search(user_input, 5);
@@ -166,7 +233,7 @@ impl PipelineEngine {
             }
         }
 
-        // 3. inject current todos
+        // 4. inject current todos
         if let Some(mgr) = &self.todo_manager {
             let mgr = mgr.lock().unwrap();
             let rendered = mgr.render();
