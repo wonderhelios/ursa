@@ -7,8 +7,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 use ursa_core::context::engine::ContextEngine;
-use ursa_core::runtime::session::{self, SessionManager};
-use ursa_services::bootstrap;
+use ursa_core::runtime::session::SessionManager;
 use ursa_services::bootstrap::loader::BootstrapLoader;
 use ursa_services::memory::store::MemoryStore;
 use ursa_services::skills::manager::SkillsManager;
@@ -50,7 +49,23 @@ async fn main() -> anyhow::Result<()> {
     let config =
         ursa_llm::models::openai::OpenAIConfig::from_env().expect("URSA_LLM_API_KEY not set");
 
-    let llm = Arc::new(ursa_llm::models::openai::OpenAIProvider::new(config));
+    // resilience (retry + auth rotation + circuit breaker)
+    // Automatically enabled if URSA_LLM_API_KEY is set (always true)
+    // Backup keys: URSA_LLM_API_KEY_2, URSA_LLM_API_KEY_3 (optional)
+    let llm = if let Some(auth) = ursa_llm::resilience::AuthManager::from_env() {
+        let resilience = Arc::new(
+            ursa_llm::resilience::Resilience::builder()
+                .retry(ursa_llm::resilience::RetryPolicy::default())
+                .auth(auth)
+                .circuit_breaker(ursa_llm::resilience::CircuitBreaker::default())
+                .build(),
+        );
+        Arc::new(ursa_llm::models::openai::OpenAIProvider::new(config).with_resilience(resilience))
+            as Arc<dyn ursa_llm::provider::LLMProvider>
+    } else {
+        Arc::new(ursa_llm::models::openai::OpenAIProvider::new(config))
+            as Arc<dyn ursa_llm::provider::LLMProvider>
+    };
 
     // shared TodoManager: both the tool and the engine hold a reference
     let todo_manager = Arc::new(Mutex::new(ursa_tools::TodoManager::new()));
