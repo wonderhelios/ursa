@@ -1,8 +1,8 @@
 // Pipeline engine - TPAR architecture
 use serde_json::json;
-use std::fmt::format;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, field::debug, info, warn};
+use ursa_services::memory::store::MemoryStore;
 
 use ursa_llm::provider::{ChatRequest, ChatResponse, LLMProvider, Message, Role, ToolCall};
 use ursa_tools::{TodoManager, ToolRegistry};
@@ -12,6 +12,8 @@ pub struct PipelineEngine {
     llm: Arc<dyn LLMProvider>,
     registry: ToolRegistry,
     todo_manager: Option<Arc<Mutex<TodoManager>>>,
+    system_prompt: Option<String>,
+    memory_store: Option<Arc<Mutex<MemoryStore>>>,
 }
 
 impl PipelineEngine {
@@ -21,12 +23,24 @@ impl PipelineEngine {
             llm,
             registry,
             todo_manager: None,
+            system_prompt: None,
+            memory_store: None,
         }
     }
 
-    /// Attach a shared TodoManager for todo state injection and nag
+    // attach a shared TodoManager for todo state injection and nag
     pub fn with_todos(mut self, manager: Arc<Mutex<TodoManager>>) -> Self {
         self.todo_manager = Some(manager);
+        self
+    }
+
+    pub fn with_system_prompt(mut self, prompt: String) -> Self {
+        self.system_prompt = Some(prompt);
+        self
+    }
+
+    pub fn with_memory(mut self, store: Arc<Mutex<MemoryStore>>) -> Self {
+        self.memory_store = Some(store);
         self
     }
 
@@ -34,7 +48,7 @@ impl PipelineEngine {
         info!("Pipeline start: {}", user_input);
 
         // === System message (with optional todo state) ===
-        let system_content = self.build_system_content();
+        let system_content = self.build_system_content(user_input);
         let mut message = vec![
             Message {
                 role: Role::System,
@@ -132,18 +146,36 @@ impl PipelineEngine {
         Ok("Reach max iterations,please retry simpler request".to_string())
     }
 
-    /// Build system message content, injecting current todos if present
-    fn build_system_content(&self) -> String {
-        let base = include_str!("./prompts/system.md").to_string();
+    /// build system message content, injecting current todos if present
+    fn build_system_content(&self, user_input: &str) -> String {
+        // 1. base: bootstrap prompt or fallback to built-in system.md
+        let mut content = self
+            .system_prompt
+            .clone()
+            .unwrap_or_else(|| include_str!("./prompts/system.md").to_string());
 
+        // 2. inject relevant memories
+        if let Some(store) = &self.memory_store {
+            let store = store.lock().unwrap();
+            let memories = store.search(user_input, 5);
+            if !memories.is_empty() {
+                content.push_str("\n\n## Relevant Memories\n");
+                for m in memories {
+                    content.push_str(&format!("- {}\n", m.content));
+                }
+            }
+        }
+
+        // 3. inject current todos
         if let Some(mgr) = &self.todo_manager {
             let mgr = mgr.lock().unwrap();
             let rendered = mgr.render();
             if !rendered.is_empty() {
-                return format!("{}\n\n## Current Task\n{}", base, rendered);
+                content.push_str(&format!("\n\n## Current Tasks\n{}", rendered));
             }
         }
-        base
+
+        content
     }
 
     /// Build a nag reminder message if a todo is stuck in InProgress too long

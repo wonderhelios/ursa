@@ -6,7 +6,9 @@ mod config;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::info;
-use ursa_services::skills::loader::Skill;
+use ursa_services::bootstrap;
+use ursa_services::bootstrap::loader::BootstrapLoader;
+use ursa_services::memory::store::MemoryStore;
 use ursa_services::skills::manager::SkillsManager;
 
 #[tokio::main]
@@ -15,6 +17,19 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     info!("Ursa starting");
+
+    let cwd = std::env::current_dir()?;
+
+    // bootstrap loader - dynamic system prompt
+    let bootstrap = BootstrapLoader::new(cwd.clone());
+    let system_prompt = bootstrap.load_system_prompt();
+    if system_prompt.is_some() {
+        info!("Bootstrap system prompt loaded");
+    }
+
+    // memory store - persistent memory at .ursa/memory.json
+    let memory_file = cwd.join(".ursa").join("memory.json");
+    let memory_store = Arc::new(Mutex::new(MemoryStore::load(memory_file)?));
 
     let config =
         ursa_llm::models::openai::OpenAIConfig::from_env().expect("URSA_LLM_API_KEY not set");
@@ -28,15 +43,18 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = ursa_tools::ToolRegistry::with_defaults();
     registry.register(ursa_tools::TodoWriteTool::new(todo_manager.clone()));
     registry.register(ursa_core::SpawnAgentTool::new(llm.clone()));
+    registry.register(ursa_tools::MemoryWriteTool::new(memory_store.clone()));
+    registry.register(ursa_tools::MemorySearchTool::new(memory_store.clone()));
 
     let engine = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry)
-        .with_todos(todo_manager.clone());
+        .with_todos(todo_manager.clone())
+        .with_memory(memory_store);
 
     // load skills from .skills/ directory in cwd
     let mut skills = SkillsManager::new(std::path::PathBuf::from(".skills"));
     skills.load().await?;
 
-    println!("Ursa Agent - type 'quit' to exit\n");
+    println!("Ursa Agent - type '/skills' to list skills, 'quit' to exit\n");
 
     loop {
         print!("> ");

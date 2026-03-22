@@ -1,1 +1,2 @@
-// 记忆搜索
+// Search logic lives in store.rs
+pub use super::store::MemoryEntry;

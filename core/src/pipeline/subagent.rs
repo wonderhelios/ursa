@@ -97,7 +97,7 @@ impl Subagent {
             tool_call_id: None,
         }];
 
-        for iter in 0..15 {
+        for iter in 0..25 {
             debug!("Subagent iteration {}", iter);
             let request = ChatRequest {
                 messages: messages.clone(),

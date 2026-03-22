@@ -31,3 +31,5 @@ pub use tools::todo_write::TodoItem;
 pub use tools::todo_write::TodoManager;
 pub use tools::todo_write::TodoWriteTool;
 pub use tools::write_file::WriteFileTool;
+pub use tools::memory_write::MemoryWriteTool;
+pub use tools::memory_search::MemorySearchTool;
