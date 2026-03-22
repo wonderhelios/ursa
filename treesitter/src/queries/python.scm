@@ -1,1 +1,0 @@
-; Python Tree-sitter queries

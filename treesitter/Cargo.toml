@@ -6,3 +6,5 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 tracing.workspace = true
+tree-sitter = "0.22"
+tree-sitter-rust = "0.21"

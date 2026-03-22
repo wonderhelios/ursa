@@ -1,1 +1,0 @@
-; Rust Tree-sitter queries
