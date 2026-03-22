@@ -9,6 +9,7 @@ use ursa_tools::{TodoManager, ToolRegistry};
 use ursa_tools::{Tool, ToolDefinition, tools};
 
 use crate::context::engine::{self, ContextEngine};
+use crate::runtime::lane::{LANE_MAIN, LaneScheduler};
 use crate::runtime::session::{Session, SessionManager};
 
 pub struct PipelineEngine {
@@ -20,6 +21,7 @@ pub struct PipelineEngine {
     conversation: Arc<Mutex<Vec<Message>>>,
     session_manager: Option<Arc<SessionManager>>,
     context_engine: Option<Arc<ContextEngine>>,
+    lane_scheduler: Option<Arc<LaneScheduler>>,
 }
 
 impl PipelineEngine {
@@ -34,6 +36,7 @@ impl PipelineEngine {
             conversation: Arc::new(Mutex::new(vec![])),
             session_manager: None,
             context_engine: None,
+            lane_scheduler: None,
         }
     }
 
@@ -64,11 +67,23 @@ impl PipelineEngine {
         self
     }
 
+    pub fn with_lanes(mut self, scheduler: Arc<LaneScheduler>) -> Self {
+        self.lane_scheduler = Some(scheduler);
+        self
+    }
+
     pub fn clear_conversation(&self) {
         self.conversation.lock().unwrap().clear();
     }
 
     pub async fn run(&self, user_input: &str) -> anyhow::Result<String> {
+        // Serialize concurrent calls through LANE_MAIN (holds permit until run() returns)
+        let _lane_permit = if let Some(sched) = &self.lane_scheduler {
+            Some(sched.permit(LANE_MAIN).await?)
+        } else {
+            None
+        };
+
         info!("Pipeline start: {}", user_input);
 
         let system_content = self.build_system_content(user_input);

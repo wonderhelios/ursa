@@ -78,10 +78,14 @@ async fn main() -> anyhow::Result<()> {
     registry.register(ursa_tools::MemorySearchTool::new(memory_store.clone()));
     registry.register(ursa_tools::NotifyTool::new(delivery_queue.clone()));
 
+    // lane scheduler - serializes user requests through LANE_MAIN
+    let scheduler = Arc::new(ursa_core::runtime::lane::LaneScheduler::default());
+
     let mut engine_builder = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry)
         .with_todos(todo_manager.clone())
         .with_memory(memory_store)
-        .with_context(context_engine);
+        .with_context(context_engine)
+        .with_lanes(scheduler);
 
     if let Some(prompt) = system_prompt {
         engine_builder = engine_builder.with_system_prompt(prompt);
