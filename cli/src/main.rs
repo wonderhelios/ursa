@@ -36,6 +36,14 @@ async fn main() -> anyhow::Result<()> {
     // session manager
     let session_manager = Arc::new(SessionManager::new(cwd.join(".ursa").join("sessions")));
 
+    // delivery queue
+    let delivery_queue = Arc::new(ursa_services::delivery::queue::DeliveryQueue::new(
+        cwd.join(".ursa"),
+    )?);
+
+    // start background runner
+    ursa_services::delivery::runner::DeliveryRunner::new(delivery_queue.clone()).start();
+
     // context engine
     let context_engine = Arc::new(ContextEngine::new(cwd.clone()));
 
@@ -53,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
     registry.register(ursa_core::SpawnAgentTool::new(llm.clone()));
     registry.register(ursa_tools::MemoryWriteTool::new(memory_store.clone()));
     registry.register(ursa_tools::MemorySearchTool::new(memory_store.clone()));
+    registry.register(ursa_tools::NotifyTool::new(delivery_queue.clone()));
 
     let mut engine_builder = ursa_core::pipeline::engine::PipelineEngine::new(llm, registry)
         .with_todos(todo_manager.clone())
