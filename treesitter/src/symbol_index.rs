@@ -51,6 +51,11 @@ impl SymbolIndex {
         self.definitions.len()
     }
 
+    /// Get all definitions (for iteration/display)
+    pub fn all_definitions(&self) -> &[Definition] {
+        &self.definitions
+    }
+
     /// Create an empty index (useful for testing).
     pub fn new_empty() -> Self {
         Self {

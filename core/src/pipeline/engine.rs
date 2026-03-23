@@ -11,6 +11,7 @@ use ursa_tools::{Tool, ToolDefinition, tools};
 use crate::context::engine::{self, ContextEngine};
 use crate::runtime::lane::{LANE_MAIN, LaneScheduler};
 use crate::runtime::session::{Session, SessionManager};
+use ursa_treesitter::symbol_index::SymbolIndex;
 
 pub struct PipelineEngine {
     llm: Arc<dyn LLMProvider>,
@@ -22,6 +23,7 @@ pub struct PipelineEngine {
     session_manager: Option<Arc<SessionManager>>,
     context_engine: Option<Arc<ContextEngine>>,
     lane_scheduler: Option<Arc<LaneScheduler>>,
+    symbol_index: Option<Arc<SymbolIndex>>,
 }
 
 impl PipelineEngine {
@@ -37,6 +39,7 @@ impl PipelineEngine {
             session_manager: None,
             context_engine: None,
             lane_scheduler: None,
+            symbol_index: None,
         }
     }
 
@@ -69,6 +72,11 @@ impl PipelineEngine {
 
     pub fn with_lanes(mut self, scheduler: Arc<LaneScheduler>) -> Self {
         self.lane_scheduler = Some(scheduler);
+        self
+    }
+
+    pub fn with_symbol_index(mut self, index: Arc<SymbolIndex>) -> Self {
+        self.symbol_index = Some(index);
         self
     }
 
@@ -228,7 +236,23 @@ impl PipelineEngine {
             .clone()
             .unwrap_or_else(|| include_str!("./prompts/system.md").to_string());
 
-        // 2. inject workspace file listing
+        // 2：inject key symbol
+        if let Some(ref index) = self.symbol_index {
+            let defs = index.all_definitions();
+            if !defs.is_empty() {
+                content.push_str("\n\n## Key Code Symbols (search these with symbol_search)\n");
+                for def in defs.iter().take(20) {
+                    content.push_str(&format!(
+                        "- {} `{}` ({}:{})\n",
+                        def.kind,
+                        def.name,
+                        def.file.file_name().unwrap_or_default().to_string_lossy(),
+                        def.line + 1
+                    ));
+                }
+            }
+        }
+        // 3. inject workspace file listing
         if let Some(ctx) = &self.context_engine {
             let workspace = ctx.build_context();
             if !workspace.is_empty() {
@@ -236,7 +260,7 @@ impl PipelineEngine {
             }
         }
 
-        // 3. inject relevant memories
+        // 4. inject relevant memories
         if let Some(store) = &self.memory_store {
             let store = store.lock().unwrap();
             let memories = store.search(user_input, 5);
@@ -248,7 +272,7 @@ impl PipelineEngine {
             }
         }
 
-        // 4. inject current todos
+        // 5. inject current todos
         if let Some(mgr) = &self.todo_manager {
             let mgr = mgr.lock().unwrap();
             let rendered = mgr.render();

@@ -6,5 +6,6 @@ pub mod memory_write;
 pub mod notify;
 pub mod read_file;
 pub mod search;
+pub mod symbol_search;
 pub mod todo_write;
 pub mod write_file;

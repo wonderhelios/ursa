@@ -26,11 +26,12 @@ pub trait Tool: Send + Sync {
 pub use registry::ToolRegistry;
 pub use tools::bash::BashTool;
 pub use tools::list_dir::ListDirTool;
+pub use tools::memory_search::MemorySearchTool;
+pub use tools::memory_write::MemoryWriteTool;
+pub use tools::notify::NotifyTool;
 pub use tools::read_file::ReadFileTool;
+pub use tools::symbol_search::SymbolSearchTool;
 pub use tools::todo_write::TodoItem;
 pub use tools::todo_write::TodoManager;
 pub use tools::todo_write::TodoWriteTool;
 pub use tools::write_file::WriteFileTool;
-pub use tools::memory_write::MemoryWriteTool;
-pub use tools::memory_search::MemorySearchTool;
-pub use tools::notify::NotifyTool;

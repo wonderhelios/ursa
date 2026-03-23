@@ -11,6 +11,7 @@ use ursa_core::runtime::session::SessionManager;
 use ursa_services::bootstrap::loader::BootstrapLoader;
 use ursa_services::memory::store::MemoryStore;
 use ursa_services::skills::manager::SkillsManager;
+use ursa_treesitter::symbol_index::SymbolIndex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -70,6 +71,9 @@ async fn main() -> anyhow::Result<()> {
     // shared TodoManager: both the tool and the engine hold a reference
     let todo_manager = Arc::new(Mutex::new(ursa_tools::TodoManager::new()));
 
+    // build symbol index for code intelligence
+    let symbol_index = Arc::new(SymbolIndex::build(&cwd));
+
     // build registry with all tools
     let mut registry = ursa_tools::ToolRegistry::with_defaults();
     registry.register(ursa_tools::TodoWriteTool::new(todo_manager.clone()));
@@ -77,6 +81,9 @@ async fn main() -> anyhow::Result<()> {
     registry.register(ursa_tools::MemoryWriteTool::new(memory_store.clone()));
     registry.register(ursa_tools::MemorySearchTool::new(memory_store.clone()));
     registry.register(ursa_tools::NotifyTool::new(delivery_queue.clone()));
+    registry.register(ursa_tools::tools::symbol_search::SymbolSearchTool::new(
+        symbol_index.clone(),
+    ));
 
     // lane scheduler - serializes user requests through LANE_MAIN
     let scheduler = Arc::new(ursa_core::runtime::lane::LaneScheduler::default());
@@ -85,7 +92,8 @@ async fn main() -> anyhow::Result<()> {
         .with_todos(todo_manager.clone())
         .with_memory(memory_store)
         .with_context(context_engine)
-        .with_lanes(scheduler);
+        .with_lanes(scheduler)
+        .with_symbol_index(symbol_index);
 
     if let Some(prompt) = system_prompt {
         engine_builder = engine_builder.with_system_prompt(prompt);

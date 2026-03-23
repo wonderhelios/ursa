@@ -17,6 +17,7 @@ ursa-core = { path = "../core" }
 ursa-llm = { path = "../llm" }
 ursa-tools = { path = "../tools" }
 ursa-services = { path = "../services" }
+ursa-treesitter = { path = "../treesitter" }
 
 tracing-subscriber = "0.3"
 

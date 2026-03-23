@@ -7,6 +7,7 @@ edition.workspace = true
 ursa-llm = { path = "../llm" }
 ursa-tools = { path = "../tools" }
 ursa-services = {path = "../services"}
+ursa-treesitter = { path = "../treesitter" }
 anyhow.workspace = true
 tokio.workspace = true
 serde.workspace = true
