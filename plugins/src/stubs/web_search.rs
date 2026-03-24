@@ -1,1 +1,1 @@
-// WebSearch 插件 stub
+// WebSearch plugin stub

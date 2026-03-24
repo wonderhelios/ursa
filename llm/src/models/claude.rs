@@ -1,1 +1,1 @@
-// Claude Provider
+// Claude provider

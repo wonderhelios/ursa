@@ -4,26 +4,39 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 use tracing::warn;
-use ursa_services::bootstrap;
 
 // ===== Event types =====
 #[derive(Debug, Clone)]
 pub enum Event {
     /// User submitted input to the pipeline
-    UserInput { content: String },
+    UserInput {
+        content: String,
+    },
     /// Pipeline started processing
-    PipelineStarted { iteration: usize },
+    PipelineStarted {
+        iteration: usize,
+    },
     /// A tool was called
-    ToolCalled { name: String, args: String },
+    ToolCalled {
+        name: String,
+        args: String,
+    },
     /// A tool returned a result
-    ToolCompleted { name: String, result_len: usize },
+    ToolCompleted {
+        name: String,
+        result_len: usize,
+    },
     /// Pipeline finished
     PipelineCompleted {
         iterations: usize,
         response_len: usize,
     },
     /// A notification was enqueued
-    NotificationQueued { message: String },
+    NotificationQueued {
+        message: String,
+    },
+    // Workflow events
+    Workflow(crate::workflow::WorkflowEvent),
 }
 
 // ===== EventBus =====

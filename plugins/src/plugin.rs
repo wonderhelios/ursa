@@ -1,1 +1,1 @@
-// Plugin Trait (保留接口)
+// Plugin Trait (reserved interface)

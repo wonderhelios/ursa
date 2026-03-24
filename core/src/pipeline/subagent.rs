@@ -1,16 +1,71 @@
 //! Subagent - isolated agent loop with tool subset and timeout
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use ursa_llm::provider::{ChatRequest, LLMProvider, Message, Role, ToolCall};
 use ursa_tools::{BashTool, ListDirTool, ReadFileTool, Tool, ToolDefinition, WriteFileTool};
+
+// ===== Context Structures =====
+
+/// Subagent context bundle - shared state passed from parent to child agent
+#[derive(Debug, Clone, Default)]
+pub struct SubagentContext {
+    /// Explored file snapshots (to avoid redundant reads)
+    pub file_snapshots: Vec<FileSnapshot>,
+    /// Current todo state
+    pub todo_state: TodoStateSnapshot,
+    /// Parent agent observations/conclusions
+    pub parent_observations: Vec<String>,
+    /// Relevant conversation history
+    pub relevant_history: Vec<Message>,
+    /// Metadata
+    pub meta: ContextMeta,
+}
+
+/// Snapshot of an explored file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSnapshot {
+    pub path: PathBuf,
+    pub content_hash: String,
+    pub summary: String,
+    pub lines_of_code: usize,
+    pub has_chinese_comments: Option<bool>,
+}
+
+/// Todo state summary
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TodoStateSnapshot {
+    pub items: Vec<TodoItemBrief>,
+    pub in_progress_id: Option<String>,
+    pub last_updated: Option<DateTime<Utc>>,
+}
+
+/// Brief todo item info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoItemBrief {
+    pub id: String,
+    pub content: String,
+    pub status: String,
+}
+
+/// Context metadata
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContextMeta {
+    pub parent_agent_id: String,
+    pub context_created_at: DateTime<Utc>,
+    pub files_explored_count: usize,
+}
 
 // ===== AgentType =====
 pub enum AgentType {
@@ -50,6 +105,7 @@ pub struct Subagent {
     llm: Arc<dyn LLMProvider>,
     tools: Vec<Box<dyn Tool>>,
     timeout_secs: u64,
+    agent_id: String,
 }
 
 impl Subagent {
@@ -57,7 +113,8 @@ impl Subagent {
         Self {
             tools: agent_type.tools(),
             llm,
-            timeout_secs: 120,
+            timeout_secs: 180,
+            agent_id: format!("subagent_{}", Uuid::new_v4()),
         }
     }
 
@@ -97,7 +154,7 @@ impl Subagent {
             tool_call_id: None,
         }];
 
-        for iter in 0..25 {
+        for iter in 0..40 {
             debug!("Subagent iteration {}", iter);
             let request = ChatRequest {
                 messages: messages.clone(),
@@ -160,7 +217,8 @@ impl Subagent {
         match tool.execute(args_val).await {
             Ok(r) => {
                 if r.len() > 10000 {
-                    format!("{}...\n[truncated]", &r[..10000])
+                    let truncated: String = r.chars().take(10000).collect();
+                    format!("{}...\n[truncated]", truncated)
                 } else {
                     r
                 }

@@ -1,1 +1,1 @@
-// LLM 配置
+// LLM configuration

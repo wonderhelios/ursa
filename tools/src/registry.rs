@@ -1,6 +1,6 @@
 // 工具注册表
 
-use crate::{Tool, registry};
+use crate::Tool;
 use std::collections::HashMap;
 
 /// Tool registry - maps tool names to implementations

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use tracing::info;
 
-use crate::bootstrap;
 
 // standard bootstrap files, loading in order
 const BOOTSTRAP_FILES: &[&str] = &[

@@ -191,6 +191,7 @@ impl OpenAIProvider {
         api_key: &str,
         body: &serde_json::Value,
     ) -> anyhow::Result<ChatResponse> {
+        debug!("Request body: {}", body);
         let response = self
             .client
             .post(format!("{}/chat/completions", self.config.base_url))
@@ -201,13 +202,31 @@ impl OpenAIProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await?;
+            let bytes = response.bytes().await?;
+            let text = String::from_utf8_lossy(&bytes);
             error!("API error {}: {}", status, text);
             return Err(anyhow::anyhow!("API error {}: {}", status, text));
         }
 
-        let json_resp: serde_json::Value = response.json().await?;
-        debug!("Response: {}", json_resp);
+        let bytes = response.bytes().await?;
+        let text = String::from_utf8_lossy(&bytes);
+
+        // Debug: log response length and first 500 chars
+        debug!("Response length: {} bytes", bytes.len());
+        debug!("Response preview: {}", text.chars().take(500).collect::<String>());
+
+        if text.trim().is_empty() {
+            return Err(anyhow::anyhow!("Empty response body from API"));
+        }
+
+        let json_resp: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("JSON parse error: {}. Raw response (first 2000 chars): {}", e, text.chars().take(2000).collect::<String>());
+                return Err(anyhow::anyhow!("Invalid JSON response: {}. Body: {}", e, text.chars().take(200).collect::<String>()));
+            }
+        };
+        debug!("Parsed response: {}", json_resp);
 
         self.parse_response(json_resp)
     }
@@ -232,6 +251,7 @@ impl LLMProvider for OpenAIProvider {
                         let base_url = base_url.clone();
                         let body = body.clone();
                         async move {
+                            debug!("Request body (resilience): {}", body);
                             let response = client
                                 .post(format!("{}/chat/completions", base_url))
                                 .header("Authorization", format!("Bearer {}", api_key))
@@ -241,12 +261,30 @@ impl LLMProvider for OpenAIProvider {
 
                             if !response.status().is_success() {
                                 let status = response.status();
-                                let text = response.text().await?;
+                                let bytes = response.bytes().await?;
+                                let text = String::from_utf8_lossy(&bytes);
                                 error!("API error {}: {}", status, text);
                                 return Err(anyhow::anyhow!("API error {}: {}", status, text));
                             }
 
-                            let json_resp: serde_json::Value = response.json().await?;
+                            let bytes = response.bytes().await?;
+                            let text = String::from_utf8_lossy(&bytes);
+
+                            // Debug: log response length and first 500 chars
+                            debug!("Response length: {} bytes", bytes.len());
+                            debug!("Response preview: {}", text.chars().take(500).collect::<String>());
+
+                            if text.trim().is_empty() {
+                                return Err(anyhow::anyhow!("Empty response body from API"));
+                            }
+
+                            let json_resp: serde_json::Value = match serde_json::from_str(&text) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("JSON parse error: {}. Raw response (first 2000 chars): {}", e, text.chars().take(2000).collect::<String>());
+                                    return Err(anyhow::anyhow!("Invalid JSON response: {}. Body: {}", e, text.chars().take(200).collect::<String>()));
+                                }
+                            };
                             Ok(json_resp)
                         }
                     })

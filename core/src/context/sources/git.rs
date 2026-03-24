@@ -1,1 +1,1 @@
-// Git Context 源 (stub)
+// Git context source (stub)

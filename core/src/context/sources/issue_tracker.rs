@@ -1,1 +1,1 @@
-// Issue 召回 Context 源 (JD 要求)
+// Issue recall context source (JD requirement)

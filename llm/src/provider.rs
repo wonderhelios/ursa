@@ -1,4 +1,4 @@
-// LLM Provider Trait
+// LLM provider trait
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

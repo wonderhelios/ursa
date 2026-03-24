@@ -1,11 +1,7 @@
 //! FileSystemSource - scans workspace source files
 
-use std::{
-    iter::Filter,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use dashmap::mapref::entry;
 
 const IGNORED_DIRS: &[&str] = &["target", ".git", "node_modules", ".ursa", ".vscode"];
 const SOURCE_EXTENSIONS: &[&str] = &[

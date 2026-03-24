@@ -4,7 +4,6 @@
 //! On failure, items are moved to `.ursa/queue/failed/`.
 //! Design: one file per item with unique UUID name → no concurrent write conflicts.
 
-use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{info, warn};

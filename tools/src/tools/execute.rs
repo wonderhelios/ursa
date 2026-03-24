@@ -1,1 +1,1 @@
-// execute (bash) 工具
+// execute (bash) tool

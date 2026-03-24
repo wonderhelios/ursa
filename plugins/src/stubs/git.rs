@@ -1,1 +1,1 @@
-// Git 插件 stub
+// Git plugin stub

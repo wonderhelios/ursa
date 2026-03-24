@@ -1,1 +1,1 @@
-// 可视化 Dashboard (JD 要求)
+// Visualization Dashboard (JD requirement)

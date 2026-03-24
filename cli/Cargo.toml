@@ -20,4 +20,5 @@ ursa-services = { path = "../services" }
 ursa-treesitter = { path = "../treesitter" }
 
 tracing-subscriber = "0.3"
+clap = { version = "4", features = ["derive"] }
 

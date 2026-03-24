@@ -2,11 +2,9 @@ pub mod registry;
 pub mod tool;
 pub mod tools;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::tools::execute;
 
 /// Tool definition
 pub struct ToolDefinition {

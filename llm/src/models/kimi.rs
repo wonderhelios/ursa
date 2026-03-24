@@ -1,1 +1,1 @@
-// Kimi Provider
+// Kimi provider

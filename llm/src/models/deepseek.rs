@@ -1,1 +1,1 @@
-// DeepSeek Provider
+// DeepSeek provider

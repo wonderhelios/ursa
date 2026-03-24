@@ -1,1 +1,1 @@
-// Trajectory 记录
+// Trajectory recording

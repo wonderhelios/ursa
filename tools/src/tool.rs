@@ -1,1 +1,1 @@
-// Tool Trait 和 ToolResult
+// Tool trait and ToolResult

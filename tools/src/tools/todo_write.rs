@@ -23,16 +23,23 @@ pub struct TodoItem {
     pub content: String,
     pub status: TodoStatus,
     pub updated_at: DateTime<Utc>,
+    /// When this item was marked in_progress (for nag tracking)
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 /// ===== TodoManager =====
 pub struct TodoManager {
     items: Vec<TodoItem>,
+    /// Last time a nag was sent (to avoid spamming)
+    last_nag_at: Option<DateTime<Utc>>,
 }
 
 impl TodoManager {
     pub fn new() -> Self {
-        Self { items: vec![] }
+        Self {
+            items: vec![],
+            last_nag_at: None,
+        }
     }
 
     pub fn update(&mut self, items: Vec<TodoItem>) -> anyhow::Result<()> {
@@ -46,7 +53,24 @@ impl TodoManager {
         if items.len() > 20 {
             return Err(anyhow!("Max 20 todos allowed"));
         }
-        self.items = items;
+
+        // Preserve started_at from existing items
+        let mut new_items = items;
+        for item in &mut new_items {
+            if item.status == TodoStatus::InProgress {
+                // Try to inherit started_at from existing item with same id
+                if item.started_at.is_none() {
+                    if let Some(existing) = self.items.iter().find(|it| it.id == item.id) {
+                        item.started_at = existing.started_at;
+                    }
+                }
+                // Set started_at if still None
+                if item.started_at.is_none() {
+                    item.started_at = Some(Utc::now());
+                }
+            }
+        }
+        self.items = new_items;
 
         Ok(())
     }
@@ -74,12 +98,60 @@ impl TodoManager {
             .join("\n")
     }
 
-    /// True if an InProgress item hasn't been updated for >= 5 minutes
+    /// True if an InProgress item has been in progress for >= 5 minutes
+    /// and we haven't nagged in the last 5 minutes
     pub fn need_nag(&self) -> bool {
+        // Check if we already nagged recently (within 5 minutes)
+        if let Some(last_nag) = self.last_nag_at {
+            if (Utc::now() - last_nag).num_minutes() < 5 {
+                return false;
+            }
+        }
+
+        // Check for stale in-progress items using started_at
         self.items
             .iter()
             .filter(|it| it.status == TodoStatus::InProgress)
-            .any(|it| (Utc::now() - it.updated_at).num_minutes() >= 5)
+            .filter_map(|it| it.started_at)
+            .any(|started| (Utc::now() - started).num_minutes() >= 5)
+    }
+
+    /// Generate and record a nag message for stale tasks
+    pub fn do_nag(&mut self) -> Option<String> {
+        if !self.need_nag() {
+            return None;
+        }
+
+        let stale_items: Vec<_> = self
+            .items
+            .iter()
+            .filter(|it| {
+                it.status == TodoStatus::InProgress
+                    && it.started_at
+                        .map(|s| (Utc::now() - s).num_minutes() >= 5)
+                        .unwrap_or(false)
+            })
+            .collect();
+
+        if stale_items.is_empty() {
+            return None;
+        }
+
+        self.last_nag_at = Some(Utc::now());
+
+        let mut msg = String::from(
+            "\n\n## Task Reminder\nYou have been working on the following task(s) for a while:\n"
+        );
+        for item in stale_items {
+            let mins = item
+                .started_at
+                .map(|s| (Utc::now() - s).num_minutes())
+                .unwrap_or(0);
+            msg.push_str(&format!("- {} ({} min)\n", item.content, mins));
+        }
+        msg.push_str("\nPlease update your progress or mark completed tasks as done.");
+
+        Some(msg)
     }
 }
 
@@ -164,6 +236,7 @@ impl Tool for TodoWriteTool {
                     content,
                     status,
                     updated_at: Utc::now(),
+                    started_at: None,
                 })
             })
             .collect();

@@ -1,14 +1,14 @@
 // Pipeline engine - TPAR architecture
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, field::debug, info, warn};
+use tracing::{debug, info, warn};
 use ursa_services::memory::store::MemoryStore;
 
-use ursa_llm::provider::{ChatRequest, ChatResponse, LLMProvider, Message, Role, ToolCall};
+use ursa_llm::provider::{ChatRequest, LLMProvider, Message, Role, ToolCall};
 use ursa_tools::{TodoManager, ToolRegistry};
-use ursa_tools::{Tool, ToolDefinition, tools};
+use ursa_tools::Tool;
 
-use crate::context::engine::{self, ContextEngine};
+use crate::context::engine::ContextEngine;
 use crate::runtime::lane::{LANE_MAIN, LaneScheduler};
 use crate::runtime::session::{Session, SessionManager};
 use ursa_treesitter::symbol_index::SymbolIndex;
@@ -28,7 +28,7 @@ pub struct PipelineEngine {
 
 impl PipelineEngine {
     pub fn new(llm: Arc<dyn LLMProvider>, registry: ToolRegistry) -> Self {
-        info!("PiplineEngine created with {} tools", registry.all().len());
+        info!("PipelineEngine created with {} tools", registry.all().len());
         Self {
             llm,
             registry,
@@ -139,8 +139,15 @@ impl PipelineEngine {
             }
         };
 
-        for iter in 0..30 {
+        for iter in 0..50 {
             debug!("Iteration {}", iter);
+
+            // Check for nag at the start of each iteration (except first)
+            if iter > 0 {
+                if let Some(nag_msg) = self.build_nag_message() {
+                    messages.push(nag_msg);
+                }
+            }
 
             let request = ChatRequest {
                 messages: messages.clone(),
@@ -286,16 +293,11 @@ impl PipelineEngine {
 
     /// Build a nag reminder message if a todo is stuck in InProgress too long
     fn build_nag_message(&self) -> Option<Message> {
-        let mgr = self.todo_manager.as_ref()?.lock().unwrap();
-        if !mgr.need_nag() {
-            return None;
-        }
+        let mut mgr = self.todo_manager.as_ref()?.lock().unwrap();
+        let nag_text = mgr.do_nag()?;
         Some(Message {
             role: Role::User,
-            content: "Reminder: you have a task marked in_progress for over 5 minutes. \
-                Please update the todo list - mark it completed if done, \
-                or break it into smaller steps."
-                .to_string(),
+            content: nag_text,
             tool_calls: None,
             tool_call_id: None,
         })
@@ -327,9 +329,10 @@ impl PipelineEngine {
 
         match tool.execute(args_val).await {
             Ok(result) => {
-                // Truncate overly long results
+                // Truncate overly long results (UTF-8 safe)
                 if result.len() > 10000 {
-                    format!("{}...\n[truncated]", &result[..10000])
+                    let truncated: String = result.chars().take(10000).collect();
+                    format!("{}...\n[truncated]", truncated)
                 } else {
                     result
                 }

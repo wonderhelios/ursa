@@ -1,1 +1,1 @@
-// ursa config 命令
+// ursa config command

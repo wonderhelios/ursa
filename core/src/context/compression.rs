@@ -1,6 +1,5 @@
 //! ContextCompressor - trims context to fit token budgets
 
-use std::fmt::format;
 
 pub struct ContextCompressor {
     max_chars: usize,
