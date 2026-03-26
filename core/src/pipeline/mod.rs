@@ -3,7 +3,6 @@
 pub mod engine;
 pub mod gvrc;
 pub mod prompts;
-pub mod stages;
 pub mod subagent;
 
 pub use engine::PipelineEngine;

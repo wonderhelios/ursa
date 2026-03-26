@@ -22,8 +22,14 @@ fn parse_execution_mode() -> ExecutionMode {
         if arg == "--mode" {
             if let Some(mode_str) = args.get(i + 1) {
                 return match mode_str.as_str() {
-                    "strict" => ExecutionMode::Strict,
-                    "standard" => ExecutionMode::Standard,
+                    "strict" => {
+                        eprintln!("⚠️  Warning: Strict mode is experimental and may not work correctly.");
+                        ExecutionMode::Strict
+                    }
+                    "standard" => {
+                        eprintln!("⚠️  Warning: Standard mode is experimental and may not work correctly.");
+                        ExecutionMode::Standard
+                    }
                     "fast" => ExecutionMode::Fast,
                     _ => {
                         eprintln!("Warning: Unknown mode '{}', using 'fast'", mode_str);
@@ -198,9 +204,9 @@ async fn main() -> anyhow::Result<()> {
                     println!("  quit / exit      — exit\n");
                     println!("Options:");
                     println!("  --mode <mode>    — execution mode: fast (default), standard, strict");
-                    println!("                     fast:    direct tool execution");
-                    println!("                     standard: single-stage GVRC with verification");
-                    println!("                     strict:   multi-stage GVRC with full planning\n");
+                    println!("                     fast:     direct tool execution (stable)");
+                    println!("                     standard: single-stage GVRC with verification [EXPERIMENTAL]");
+                    println!("                     strict:   multi-stage GVRC with full planning [EXPERIMENTAL]\n");
                     continue;
                 }
                 "skills" => {
