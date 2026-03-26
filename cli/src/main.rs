@@ -7,11 +7,35 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 use ursa_core::context::engine::ContextEngine;
+use ursa_core::pipeline::gvrc::ExecutionMode;
 use ursa_core::runtime::session::SessionManager;
 use ursa_services::bootstrap::loader::BootstrapLoader;
 use ursa_services::memory::store::MemoryStore;
 use ursa_services::skills::manager::SkillsManager;
 use ursa_treesitter::symbol_index::SymbolIndex;
+
+/// Parse command line arguments for --mode
+fn parse_execution_mode() -> ExecutionMode {
+    let args: Vec<String> = std::env::args().collect();
+
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--mode" {
+            if let Some(mode_str) = args.get(i + 1) {
+                return match mode_str.as_str() {
+                    "strict" => ExecutionMode::Strict,
+                    "standard" => ExecutionMode::Standard,
+                    "fast" => ExecutionMode::Fast,
+                    _ => {
+                        eprintln!("Warning: Unknown mode '{}', using 'fast'", mode_str);
+                        ExecutionMode::Fast
+                    }
+                };
+            }
+        }
+    }
+
+    ExecutionMode::Fast // default
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,6 +45,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Ursa starting");
 
     let cwd = std::env::current_dir()?;
+
+    // Parse execution mode from command line
+    let execution_mode = parse_execution_mode();
+    if execution_mode != ExecutionMode::Fast {
+        println!("Execution mode: {:?}", execution_mode);
+    }
 
     // bootstrap loader - dynamic system prompt
     let bootstrap = BootstrapLoader::new(cwd.clone());
@@ -93,7 +123,8 @@ async fn main() -> anyhow::Result<()> {
         .with_memory(memory_store)
         .with_context(context_engine)
         .with_lanes(scheduler)
-        .with_symbol_index(symbol_index);
+        .with_symbol_index(symbol_index)
+        .with_execution_mode(execution_mode);
 
     if let Some(prompt) = system_prompt {
         engine_builder = engine_builder.with_system_prompt(prompt);
@@ -165,6 +196,11 @@ async fn main() -> anyhow::Result<()> {
                         "  /resume [id]     — not available mid-session; restart with --resume"
                     );
                     println!("  quit / exit      — exit\n");
+                    println!("Options:");
+                    println!("  --mode <mode>    — execution mode: fast (default), standard, strict");
+                    println!("                     fast:    direct tool execution");
+                    println!("                     standard: single-stage GVRC with verification");
+                    println!("                     strict:   multi-stage GVRC with full planning\n");
                     continue;
                 }
                 "skills" => {
