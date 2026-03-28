@@ -30,4 +30,4 @@ pub use types::{
     CheckType, Criterion, ExecutionMode, FailedAttempt, Plan, PlannedAction, Solution, Stage,
     StageResult, VerificationResult,
 };
-pub use verifier::Verifier;
+pub use verifier::{ExecutionResult, Verifier};

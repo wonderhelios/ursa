@@ -39,6 +39,7 @@ impl Reviewer {
             max_tokens: Some(2048),
             tools: None,
             tool_choice: None,
+            stream: None,
         };
 
         let response = self.llm.chat(request).await?;

@@ -4,13 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::provider::{
-    ChatRequest, ChatResponse, FunctionCall, LLMProvider, Message, TokenUsage, ToolCall,
+    ChatRequest, ChatResponse, FunctionCall, LLMProvider, Message, StreamChunk, StreamSender, TokenUsage, ToolCall,
 };
 use crate::resilience::Resilience;
 
@@ -293,6 +295,152 @@ impl LLMProvider for OpenAIProvider {
             }
             None => self.do_request(&self.config.api_key, &body).await,
         }
+    }
+
+    async fn stream_chat(
+        &self,
+        request: ChatRequest,
+        sender: StreamSender,
+    ) -> anyhow::Result<()> {
+        let messages = self.convert_messages(&request.messages);
+        let mut body = self.build_body(&request, &messages);
+        body["stream"] = json!(true);
+
+        // Use a separate client with longer timeout for streaming
+        let stream_client = Client::builder()
+            .timeout(Duration::from_secs(300)) // 5 minutes for streaming
+            .build()
+            .expect("Failed to build stream HTTP client");
+
+        let response = stream_client
+            .post(format!("{}/chat/completions", self.config.base_url))
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await?;
+            error!("API error {}: {}", status, text);
+            let _ = sender.send(StreamChunk::Error(format!("API error {}: {}", status, text)));
+            return Err(anyhow::anyhow!("API error {}: {}", status, text));
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        // Use Vec instead of HashMap to maintain order by index
+        let mut active_tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, accumulated_args)
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk: Bytes = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Stream chunk error: {}", e);
+                    let _ = sender.send(StreamChunk::Error(format!("Stream error: {}", e)));
+                    return Err(anyhow::anyhow!("Stream error: {}", e));
+                }
+            };
+            let text = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&text);
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                if let Some(data) = event.strip_prefix("data: ") {
+                    if data == "[DONE]" {
+                        let _ = sender.send(StreamChunk::Done);
+                        return Ok(());
+                    }
+
+                    match serde_json::from_str::<serde_json::Value>(data) {
+                        Ok(json) => {
+                            if let Some(error) = json.get("error") {
+                                let err_msg = error.to_string();
+                                let _ = sender.send(StreamChunk::Error(err_msg.clone()));
+                                return Err(anyhow::anyhow!("Stream error: {}", err_msg));
+                            }
+
+                            if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                for choice in choices {
+                                    let delta = &choice["delta"];
+
+                                    // Handle content
+                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                        let _ = sender.send(StreamChunk::Content(content.to_string()));
+                                    }
+
+                                    // Handle tool calls
+                                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                        for tc in tool_calls {
+                                            let id = tc.get("id").and_then(|i| i.as_str());
+                                            let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                            let function = tc.get("function");
+
+                                            // Ensure we have a slot for this index
+                                            while active_tool_calls.len() <= index {
+                                                active_tool_calls.push((String::new(), String::new(), String::new()));
+                                            }
+
+                                            // If we have an ID, this is a new tool call start
+                                            if let Some(id_str) = id {
+                                                let name = function
+                                                    .and_then(|f| f.get("name"))
+                                                    .and_then(|n| n.as_str())
+                                                    .unwrap_or("");
+
+                                                if !name.is_empty() {
+                                                    let _ = sender.send(StreamChunk::ToolCallStart {
+                                                        id: id_str.to_string(),
+                                                        name: name.to_string(),
+                                                    });
+                                                }
+
+                                                // Store/update the tool call info
+                                                active_tool_calls[index] = (id_str.to_string(), name.to_string(), String::new());
+                                            }
+
+                                            // Handle function arguments delta
+                                            if let Some(func) = function
+                                                && let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
+                                                    if index < active_tool_calls.len() {
+                                                        let (id, _, accumulated) = &mut active_tool_calls[index];
+                                                        if !id.is_empty() {
+                                                            let _ = sender.send(StreamChunk::ToolCallArgs {
+                                                                id: id.clone(),
+                                                                delta: args.to_string(),
+                                                            });
+                                                        }
+                                                        accumulated.push_str(args);
+                                                    }
+                                                }
+                                        }
+                                    }
+
+                                    // Check finish_reason
+                                    if let Some(finish_reason) = choice.get("finish_reason").and_then(|f| f.as_str())
+                                        && (finish_reason == "tool_calls" || finish_reason == "stop") {
+                                            for (id, _, _) in &active_tool_calls {
+                                                if !id.is_empty() {
+                                                    let _ = sender.send(StreamChunk::ToolCallEnd { id: id.clone() });
+                                                }
+                                            }
+                                            active_tool_calls.clear();
+                                        }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse SSE data: {}. Data: {}", e, data);
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = sender.send(StreamChunk::Done);
+        Ok(())
     }
 
     fn name(&self) -> &str {

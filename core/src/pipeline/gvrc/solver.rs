@@ -57,6 +57,7 @@ impl Solver {
             max_tokens: Some(4096),
             tools: None,
             tool_choice: None,
+            stream: None,
         };
 
         let response = self.llm.chat(request).await?;

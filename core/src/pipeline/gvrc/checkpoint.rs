@@ -3,7 +3,7 @@
 use crate::pipeline::gvrc::types::Solution;
 use anyhow::Result;
 use std::io::{self, Write};
-use tracing::{info, warn};
+use tracing::warn;
 
 /// Checkpoint type for human confirmation.
 pub enum Checkpoint {

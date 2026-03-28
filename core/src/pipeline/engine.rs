@@ -7,13 +7,18 @@ use crate::pipeline::gvrc::{
     ActionExecutor, ExecutionMode, Planner, Reviewer, Solver, Verifier, WorkflowEvent,
 };
 use crate::runtime::bus::EventBus;
-use ursa_llm::provider::{ChatRequest, LLMProvider, Message, Role, ToolCall};
+use ursa_llm::provider::{ChatRequest, FunctionCall, LLMProvider, Message, Role, ToolCall, StreamChunk};
 use ursa_tools::{TodoManager, ToolRegistry};
 
 use crate::context::engine::ContextEngine;
 use crate::runtime::lane::{LANE_MAIN, LaneScheduler};
 use crate::runtime::session::{Session, SessionManager};
 use ursa_treesitter::symbol_index::SymbolIndex;
+
+/// Maximum iterations for Fast mode ReAct loop
+const DEFAULT_MAX_ITERATIONS: usize = 50;
+/// Maximum iterations for streaming mode
+const DEFAULT_STREAM_MAX_ITERATIONS: usize = 50;
 
 pub struct PipelineEngine {
     llm: Arc<dyn LLMProvider>,
@@ -94,12 +99,167 @@ impl PipelineEngine {
         self.conversation.lock().unwrap().clear();
     }
 
+    /// Load a session at runtime (for /resume command)
+    pub fn load_session(&self, messages: Vec<Message>) {
+        *self.conversation.lock().unwrap() = messages;
+    }
+
+    /// Get current conversation message count
+    pub fn conversation_len(&self) -> usize {
+        self.conversation.lock().unwrap().len()
+    }
+    /// Get current execution mode
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
+    }
+
+
     /// Main entry point: selects execution mode
     pub async fn run(&self, input: &str) -> anyhow::Result<String> {
         match self.execution_mode {
             ExecutionMode::Fast => self.run_fast(input).await,
             ExecutionMode::Standard | ExecutionMode::Strict => self.run_gvrc(input).await,
         }
+    }
+
+    /// Stream mode: Execute with streaming output for real-time display
+    pub async fn run_stream<F>(&self, input: &str, mut on_chunk: F) -> anyhow::Result<String>
+    where
+        F: FnMut(&str) + Send + 'static,
+    {
+        let _lane_permit = if let Some(sched) = &self.lane_scheduler {
+            Some(sched.permit(LANE_MAIN).await?)
+        } else {
+            None
+        };
+
+        info!("[Stream] Pipeline start: {}", input);
+
+        let system_content = self.build_system_content(input);
+        let mut messages = vec![Message {
+            role: Role::System,
+            content: system_content,
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+
+        {
+            let conv = self.conversation.lock().unwrap();
+            messages.extend(conv.clone());
+        }
+
+        messages.push(Message {
+            role: Role::User,
+            content: input.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        let tools_json = self.build_tools_json();
+
+        // Stream loop with tool execution
+        for iter in 0..DEFAULT_STREAM_MAX_ITERATIONS {
+            debug!("[Stream] Iteration {}", iter);
+
+            let request = ChatRequest {
+                messages: messages.clone(),
+                temperature: Some(0.3),
+                max_tokens: Some(4096),
+                tools: tools_json.clone(),
+                tool_choice: None,
+                stream: Some(true),
+            };
+
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamChunk>();
+            let llm = self.llm.clone();
+
+            // Spawn streaming task
+            let stream_task = tokio::spawn(async move {
+                llm.stream_chat(request, tx).await
+            });
+
+            let mut full_content = String::new();
+            let mut pending_tool_calls: std::collections::HashMap<String, (String, String)> =
+                std::collections::HashMap::new();
+            let mut received_tool_calls = false;
+
+            // Process stream chunks
+            while let Some(chunk) = rx.recv().await {
+                match chunk {
+                    StreamChunk::Content(text) => {
+                        full_content.push_str(&text);
+                        on_chunk(&text);
+                    }
+                    StreamChunk::ToolCallStart { id, name } => {
+                        pending_tool_calls.insert(id, (name, String::new()));
+                        received_tool_calls = true;
+                    }
+                    StreamChunk::ToolCallArgs { id, delta } => {
+                        if let Some((_, args)) = pending_tool_calls.get_mut(&id) {
+                            args.push_str(&delta);
+                        }
+                    }
+                    StreamChunk::ToolCallEnd { .. } => {}
+                    StreamChunk::Done => break,
+                    StreamChunk::Error(e) => {
+                        eprintln!("\n[Stream Error]: {}", e);
+                    }
+                }
+            }
+
+            // Wait for stream task to complete
+            stream_task.await??;
+
+            // If no tool calls, we're done
+            if !received_tool_calls {
+                self.save_conversation(input, &full_content).await;
+                return Ok(full_content);
+            }
+
+            // Add assistant message with tool calls
+            let tool_calls: Vec<ToolCall> = pending_tool_calls
+                .iter()
+                .map(|(id, (name, args))| ToolCall {
+                    id: id.clone(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: name.clone(),
+                        arguments: args.clone(),
+                    },
+                })
+                .collect();
+
+            messages.push(Message {
+                role: Role::Assistant,
+                content: full_content.clone(),
+                tool_calls: Some(tool_calls.clone()),
+                tool_call_id: None,
+            });
+
+            // Execute tools and add results
+            for tc in &tool_calls {
+                let result = self.execute_tool(tc).await;
+
+                // Show tool execution
+                on_chunk(&format!("\n[Executing: {}]\n", tc.function.name));
+                if tc.function.name == "todo_write" {
+                    on_chunk(&result);
+                }
+
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result,
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+            }
+
+            // Continue loop for next iteration with tool results
+            on_chunk("\n");
+        }
+
+        warn!("[Stream] Max iterations reached");
+        Ok("Max iterations reached. Please retry with a simpler request.".to_string())
     }
 
     /// Fast mode: Direct ReAct loop (existing behavior)
@@ -134,13 +294,16 @@ impl PipelineEngine {
 
         let tools_json = self.build_tools_json();
 
-        for iter in 0..50 {
+        for iter in 0..DEFAULT_MAX_ITERATIONS {
             debug!("[Fast] Iteration {}", iter);
 
-            if iter > 0 {
-                if let Some(nag_msg) = self.build_nag_message() {
-                    messages.push(nag_msg);
-                }
+            // Add nag message after first iteration if there are stuck todos
+            if let Some(nag_msg) = iter
+                .gt(&0)
+                .then(|| self.build_nag_message())
+                .flatten()
+            {
+                messages.push(nag_msg);
             }
 
             let request = ChatRequest {
@@ -149,6 +312,7 @@ impl PipelineEngine {
                 max_tokens: Some(4096),
                 tools: tools_json.clone(),
                 tool_choice: None,
+                stream: None,
             };
 
             let response = self.llm.chat(request).await?;

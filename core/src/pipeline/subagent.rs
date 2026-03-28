@@ -105,6 +105,7 @@ pub struct Subagent {
     llm: Arc<dyn LLMProvider>,
     tools: Vec<Box<dyn Tool>>,
     timeout_secs: u64,
+    #[allow(dead_code)]
     agent_id: String,
 }
 
@@ -166,6 +167,7 @@ impl Subagent {
                     Some(tools_json.clone())
                 },
                 tool_choice: None,
+                stream: None,
             };
 
             let response = self.llm.chat(request).await?;

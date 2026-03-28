@@ -2,15 +2,38 @@
 //!
 //! Usage:
 //! ```
-//! let resilience = Resilience::builder()
-//!     .retry(RetryPolicy::default())
-//!     .auth(AuthManager::from_env())
-//!     .circuit_breaker(CircuitBreaker::default())
-//!     .build();
+//! use ursa_llm::resilience::{Resilience, RetryPolicy, AuthManager, CircuitBreaker};
 //!
-//! let result = resilience
-//!     .execute(|api_key| async move { call_api(&api_key).await })
-//!     .await;
+//! async fn example() -> anyhow::Result<()> {
+//!     // Create a simple auth manager with a test key
+//!     let auth = AuthManager::new(vec![
+//!         ursa_llm::resilience::AuthProfile {
+//!             name: "test".to_string(),
+//!             api_key: "test-key".to_string(),
+//!         }
+//!     ]);
+//!
+//!     let resilience = Resilience::builder()
+//!         .retry(RetryPolicy::default())
+//!         .auth(auth)
+//!         .circuit_breaker(CircuitBreaker::default())
+//!         .build();
+//!
+//!     // Example async operation
+//!     let result = resilience
+//!         .execute(|api_key| async move {
+//!             // Simulate an API call
+//!             if api_key == "test-key" {
+//!                 Ok("success")
+//!             } else {
+//!                 Err(anyhow::anyhow!("Invalid API key"))
+//!             }
+//!         })
+//!         .await?;
+//!
+//!     println!("Result: {}", result);
+//!     Ok(())
+//! }
 //! ```
 
 use std::collections::HashSet;
@@ -123,14 +146,13 @@ impl AuthManager {
         }];
 
         for i in 2..=9 {
-            if let Ok(key) = std::env::var(format!("URSA_LLM_API_KEY_{}", i)) {
-                if !key.is_empty() {
+            if let Ok(key) = std::env::var(format!("URSA_LLM_API_KEY_{}", i))
+                && !key.is_empty() {
                     profiles.push(AuthProfile {
                         name: format!("backup_{}", i),
                         api_key: key,
                     });
                 }
-            }
         }
 
         Some(Self::new(profiles))
@@ -319,12 +341,11 @@ impl Resilience {
                     );
 
                     // Rotate auth on rate limit / auth errors
-                    if self.policy.is_auth_error(&msg) {
-                        if !self.auth.rotate() {
+                    if self.policy.is_auth_error(&msg)
+                        && !self.auth.rotate() {
                             warn!("All auth profiles exhausted");
                             return Err(e);
                         }
-                    }
 
                     last_error = Some(e);
                     // Wait before retrying (skip wait on last attempt)

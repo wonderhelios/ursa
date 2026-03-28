@@ -49,10 +49,7 @@ impl EventBus {
 
     // publish an event to all current subscribers
     pub fn publish(&self, event: Event) -> usize {
-        match self.sender.send(event) {
-            Ok(n) => n,
-            Err(_) => 0,
-        }
+        self.sender.send(event).unwrap_or_default()
     }
 
     // publish a workflow event (convenience method)

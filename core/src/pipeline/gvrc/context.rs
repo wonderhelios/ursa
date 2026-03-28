@@ -53,7 +53,7 @@ impl GvrcContextBuilder {
         }
 
         // Symbol index integration
-        if let Some(ref index) = self.symbol_index {
+        if let Some(ref _index) = self.symbol_index {
             let relevant_symbols = self.find_relevant_symbols(stage);
             if !relevant_symbols.is_empty() {
                 context.push_str("## Relevant Code Symbols\n");

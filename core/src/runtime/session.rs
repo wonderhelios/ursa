@@ -102,7 +102,7 @@ impl SessionManager {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        let id = stem.split('_').last().unwrap_or("unknown").to_string();
+        let id = stem.split('_').next_back().unwrap_or("unknown").to_string();
 
         info!(
             "Session loaded: {} ({} messages)",

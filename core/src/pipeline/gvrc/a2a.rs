@@ -2,7 +2,7 @@
 //! Allows Ursa to be called by other agents via a simple HTTP interface.
 
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
 /// A2A Agent card - describes this agent's capabilities.
 #[derive(Debug, Clone, Serialize, Deserialize)]

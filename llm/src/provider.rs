@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 /// Message role
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -50,6 +51,8 @@ pub struct ChatRequest {
     pub tools: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
 }
 
 /// Chat response
@@ -70,8 +73,35 @@ pub struct TokenUsage {
     pub total_tokens: usize,
 }
 
+/// A chunk of streamed response
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// Text content delta
+    Content(String),
+    /// Tool call started
+    ToolCallStart { id: String, name: String },
+    /// Tool call arguments delta
+    ToolCallArgs { id: String, delta: String },
+    /// Tool call completed
+    ToolCallEnd { id: String },
+    /// Stream completed
+    Done,
+    /// Error occurred
+    Error(String),
+}
+
+/// Sender for streaming chunks
+pub type StreamSender = mpsc::UnboundedSender<StreamChunk>;
+
 #[async_trait]
 pub trait LLMProvider: Send + Sync {
     async fn chat(&self, request: ChatRequest) -> anyhow::Result<ChatResponse>;
     fn name(&self) -> &str;
+
+    /// Stream chat response to sender
+    async fn stream_chat(
+        &self,
+        request: ChatRequest,
+        sender: StreamSender,
+    ) -> anyhow::Result<()>;
 }

@@ -1,7 +1,6 @@
 //! Learning mechanism - extracts patterns from successful executions.
 
-use crate::pipeline::gvrc::types::{Plan, Solution, Stage};
-use anyhow::Result;
+use crate::pipeline::gvrc::types::Plan;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
@@ -72,8 +71,8 @@ impl Learner {
     pub fn get_guidance(&self, task_description: &str) -> Option<String> {
         let task_type = self.classify_task(task_description);
 
-        if let Some(pattern) = self.patterns.get(&task_type) {
-            if pattern.observation_count >= 2 && pattern.success_rate > 0.7 {
+        if let Some(pattern) = self.patterns.get(&task_type)
+            && pattern.observation_count >= 2 && pattern.success_rate > 0.7 {
                 return Some(format!(
                     "💡 Based on {} similar tasks:\n- Typical approach: {}\n- Effective tools: {}\n- Expected iterations: ~{}",
                     pattern.observation_count,
@@ -82,7 +81,6 @@ impl Learner {
                     pattern.typical_iterations
                 ));
             }
-        }
 
         None
     }

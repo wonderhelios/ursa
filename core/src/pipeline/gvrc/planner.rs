@@ -54,6 +54,7 @@ impl Planner {
             max_tokens: Some(8192),  // Increased for longer plans
             tools: None,
             tool_choice: None,
+            stream: None,
         };
 
         let response = self.llm.chat(request).await?;
@@ -132,11 +133,7 @@ impl Planner {
                         .and_then(|chk| {
                             if let Some(cmd) = chk.get("command").and_then(|v| v.as_str()) {
                                 Some(CheckType::Automated { command: cmd.to_string() })
-                            } else if let Some(prompt) = chk.get("prompt").and_then(|v| v.as_str()) {
-                                Some(CheckType::Llm { prompt: prompt.to_string() })
-                            } else {
-                                None
-                            }
+                            } else { chk.get("prompt").and_then(|v| v.as_str()).map(|prompt| CheckType::Llm { prompt: prompt.to_string() }) }
                         })
                         .unwrap_or_else(|| CheckType::Llm { prompt: format!("Verify: {}", desc) });
 

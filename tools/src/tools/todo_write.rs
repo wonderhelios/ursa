@@ -59,11 +59,10 @@ impl TodoManager {
         for item in &mut new_items {
             if item.status == TodoStatus::InProgress {
                 // Try to inherit started_at from existing item with same id
-                if item.started_at.is_none() {
-                    if let Some(existing) = self.items.iter().find(|it| it.id == item.id) {
+                if item.started_at.is_none()
+                    && let Some(existing) = self.items.iter().find(|it| it.id == item.id) {
                         item.started_at = existing.started_at;
                     }
-                }
                 // Set started_at if still None
                 if item.started_at.is_none() {
                     item.started_at = Some(Utc::now());
@@ -102,11 +101,10 @@ impl TodoManager {
     /// and we haven't nagged in the last 5 minutes
     pub fn need_nag(&self) -> bool {
         // Check if we already nagged recently (within 5 minutes)
-        if let Some(last_nag) = self.last_nag_at {
-            if (Utc::now() - last_nag).num_minutes() < 5 {
+        if let Some(last_nag) = self.last_nag_at
+            && (Utc::now() - last_nag).num_minutes() < 5 {
                 return false;
             }
-        }
 
         // Check for stale in-progress items using started_at
         self.items

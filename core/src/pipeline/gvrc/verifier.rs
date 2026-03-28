@@ -1,11 +1,18 @@
 //! Verifier - validates solutions against acceptance criteria.
 
 use crate::pipeline::gvrc::types::{CheckType, Criterion, Solution, VerificationResult};
-use crate::pipeline::prompts;
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use ursa_llm::provider::{ChatRequest, LLMProvider, Message, Role};
+
+/// Execution result for post-execution verification
+#[derive(Debug, Clone)]
+pub struct ExecutionResult {
+    pub success: bool,
+    pub output: String,
+    pub error: Option<String>,
+}
 
 /// Verifier checks if a solution meets acceptance criteria.
 pub struct Verifier {
@@ -18,13 +25,14 @@ impl Verifier {
         Self { llm }
     }
 
-    /// Verify a solution against the given criteria.
-    pub async fn verify(
+    /// Verify a solution after execution (post-execution verification)
+    pub async fn verify_execution(
         &self,
         solution: &Solution,
         criteria: &[Criterion],
+        exec_results: &[ExecutionResult],
     ) -> Result<VerificationResult> {
-        info!("Verifying solution against {} criteria", criteria.len());
+        info!("Verifying execution against {} criteria", criteria.len());
 
         if criteria.is_empty() {
             return Ok(VerificationResult::Passed);
@@ -35,23 +43,14 @@ impl Verifier {
         for criterion in criteria {
             debug!("Checking criterion: {}", criterion.id);
 
-            // Smart check type detection based on description
-            let passed = if criterion.description.to_lowercase().contains("no warning")
-                || criterion.description.to_lowercase().contains("warning free")
-                || criterion.description.to_lowercase().contains("clean build")
-            {
-                // For "no warnings" criteria, cargo check should have 0 warnings
-                // Check if cargo check output contains "warning:"
-                self.run_cargo_check_no_warnings().await
-            } else if criterion.description.to_lowercase().contains("compile")
-                || criterion.description.to_lowercase().contains("build")
-            {
-                // For compile success, just check exit code
-                self.run_automated_check("cargo check").await
-            } else {
-                match &criterion.check {
-                    CheckType::Automated { command } => self.run_automated_check(command).await,
-                    CheckType::Llm { prompt } => self.run_llm_check(prompt, solution).await,
+            let passed = match &criterion.check {
+                CheckType::Automated { command } => {
+                    // Run the check command after execution
+                    self.run_automated_check(command).await
+                }
+                CheckType::Llm { prompt } => {
+                    // Use LLM to verify with execution context
+                    self.run_llm_check_with_results(prompt, solution, exec_results).await
                 }
             };
 
@@ -70,34 +69,75 @@ impl Verifier {
         }
     }
 
-    async fn run_cargo_check_no_warnings(&self) -> bool {
-        info!("Running cargo check to verify no warnings");
+    /// Pre-execution verification: performs lightweight sanity checks before execution
+    ///
+    /// Checks for:
+    /// - Solution has planned actions
+    /// - Each action has valid tool name and parameters
+    /// - Reasoning is not empty
+    /// - Expected outcome is clearly stated
+    pub async fn verify(
+        &self,
+        solution: &Solution,
+        criteria: &[Criterion],
+    ) -> Result<VerificationResult> {
+        info!("Pre-execution verification of {} criteria", criteria.len());
 
-        match tokio::process::Command::new("cargo")
-            .args(&["check", "--message-format=short"])
-            .output()
-            .await
-        {
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let combined = format!("{} {}", stdout, stderr);
+        let mut failures = Vec::new();
 
-                // Check if there are any warnings
-                let has_warnings = combined.contains("warning:") || combined.contains("Warning:");
+        // Check 1: Solution must have actions
+        if solution.planned_actions.is_empty() {
+            failures.push("No planned actions".to_string());
+        }
 
-                if has_warnings {
-                    debug!("Found warnings in cargo check output");
-                    false
-                } else {
-                    info!("No warnings found");
-                    true
+        // Check 2: Reasoning should be substantive (at least 20 chars)
+        if solution.reasoning.len() < 20 {
+            failures.push("Reasoning too brief".to_string());
+        }
+
+        // Check 3: Expected outcome should be stated
+        if solution.expected_outcome.is_empty() || solution.expected_outcome.len() < 10 {
+            failures.push("Expected outcome unclear".to_string());
+        }
+
+        // Check 4: Each planned action should have valid tool name and non-empty args
+        for (i, action) in solution.planned_actions.iter().enumerate() {
+            if action.tool.is_empty() {
+                failures.push(format!("Action {}: missing tool name", i + 1));
+            }
+            // Note: We don't validate if tool exists here - that's done during execution
+            // But we can check if args are valid JSON
+            if !action.args.is_null() && !action.args.is_object() {
+                failures.push(format!("Action {}: args should be an object", i + 1));
+            }
+        }
+
+        // Check 5: Validate against explicit criteria (lightweight checks only)
+        for criterion in criteria {
+            // For pre-execution, only check criteria that don't require execution
+            // For example, check if the solution mentions required tools
+            match &criterion.check {
+                CheckType::Automated { command } if command.starts_with("exists ") => {
+                    // File existence check can be done pre-execution
+                    let path = command.trim_start_matches("exists ");
+                    if !std::path::Path::new(path).exists() {
+                        failures.push(format!("{}: required file not found", criterion.id));
+                    }
+                }
+                _ => {
+                    // Other checks are deferred to post-execution verification
+                    debug!("Deferring criterion {} to post-execution", criterion.id);
                 }
             }
-            Err(e) => {
-                warn!("Failed to run cargo check: {}", e);
-                false
-            }
+        }
+
+        if failures.is_empty() {
+            info!("Pre-execution checks passed");
+            Ok(VerificationResult::Passed)
+        } else {
+            let hints = format!("Pre-execution failures: {}", failures.join("; "));
+            warn!("{}", hints);
+            Ok(VerificationResult::Failed { failures, hints })
         }
     }
 
@@ -125,18 +165,38 @@ impl Verifier {
         }
     }
 
-    async fn run_llm_check(&self, check_prompt: &str, solution: &Solution) -> bool {
-        let criteria_str = format!("- {}\n", check_prompt);
+    async fn run_llm_check_with_results(
+        &self,
+        check_prompt: &str,
+        solution: &Solution,
+        exec_results: &[ExecutionResult],
+    ) -> bool {
+        let results_str = exec_results
+            .iter()
+            .map(|r| {
+                format!(
+                    "Action: {}\nSuccess: {}\nOutput: {}\nError: {:?}",
+                    if r.success { "✓" } else { "✗" },
+                    r.success,
+                    r.output.chars().take(500).collect::<String>(),
+                    r.error
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n---\n");
 
-        let solution_str = format!(
-            "Reasoning: {}\nExpected Outcome: {}\nPlanned Actions: {:?}",
-            solution.reasoning, solution.expected_outcome, solution.planned_actions
+        let prompt = format!(
+            "Verify if the following execution results meet the criterion.\n\n\
+            Criterion: {}\n\n\
+            Solution: {}\n\n\
+            Expected Outcome: {}\n\n\
+            Execution Results:\n{}\n\n\
+            Does the execution successfully meet the criterion? Reply with PASS or FAIL and briefly explain why.",
+            check_prompt,
+            solution.reasoning,
+            solution.expected_outcome,
+            results_str
         );
-
-        let prompt = prompts::VERIFIER
-            .replace("{acceptance_criteria}", &criteria_str)
-            .replace("{solution}", &solution_str)
-            .replace("{expected_outcome}", &solution.expected_outcome);
 
         let request = ChatRequest {
             messages: vec![Message {
@@ -146,9 +206,10 @@ impl Verifier {
                 tool_call_id: None,
             }],
             temperature: Some(0.1),
-            max_tokens: Some(100),
+            max_tokens: Some(200),
             tools: None,
             tool_choice: None,
+            stream: None,
         };
 
         match self.llm.chat(request).await {

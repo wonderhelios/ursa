@@ -65,16 +65,14 @@ impl FileSystemSource {
                 if !IGNORED_DIRS.contains(&name.as_str()) {
                     self.scan_dir(&path, result);
                 }
-            } else if let Some(ext) = path.extension() {
-                if SOURCE_EXTENSIONS.contains(&ext.to_str().unwrap_or("")) {
-                    if let Ok(rel) = path.strip_prefix(&self.workspace_root) {
+            } else if let Some(ext) = path.extension()
+                && SOURCE_EXTENSIONS.contains(&ext.to_str().unwrap_or(""))
+                    && let Ok(rel) = path.strip_prefix(&self.workspace_root) {
                         result.push(WorkspaceFile {
                             path: path.clone(),
                             relative_path: rel.to_string_lossy().to_string(),
                         });
                     }
-                }
-            }
         }
     }
 }
