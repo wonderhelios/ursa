@@ -22,4 +22,5 @@ ursa-treesitter = { path = "../treesitter" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 

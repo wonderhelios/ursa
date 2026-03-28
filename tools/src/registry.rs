@@ -1,4 +1,4 @@
-// 工具注册表
+// Tool registry
 
 use crate::Tool;
 use std::collections::HashMap;

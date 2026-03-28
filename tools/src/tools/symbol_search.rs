@@ -1,29 +1,28 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::sync::Arc;
 
-use ursa_treesitter::symbol_index::SymbolIndex;
 use ursa_treesitter::scope_graph::Definition;
+use ursa_treesitter::symbol_index::SharedSymbolIndex;
 
 use crate::{Tool, ToolDefinition};
 
 pub struct SymbolSearchTool {
-    index: Arc<SymbolIndex>,
+    index: SharedSymbolIndex,
 }
 
 impl SymbolSearchTool {
-    pub fn new(index: Arc<SymbolIndex>) -> Self {
+    pub fn new(index: SharedSymbolIndex) -> Self {
         Self { index }
     }
 
-    fn format_result(&self, matches: &[Definition]) -> String {
+    fn format_result(&self, matches: Vec<Definition>) -> String {
         if matches.is_empty() {
             return "No symbols found.".to_string();
         }
 
         let mut output = format!("Found {} symbols:\n\n", matches.len());
 
-        for (i, def) in matches.iter().enumerate() {
+        for (i, def) in matches.iter().enumerate().take(5) {
             output.push_str(&format!(
                 "{}. {} `{}` at {}:{}\n",
                 i + 1,
@@ -82,14 +81,12 @@ impl Tool for SymbolSearchTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
 
-        let matches: Vec<_> = self
-            .index
-            .search(query)
-            .into_iter()
-            .take(5)
-            .cloned()
-            .collect();
+        let matches = {
+            let index = self.index.read()
+                .map_err(|_| anyhow::anyhow!("Index lock poisoned"))?;
+            index.search(query)
+        };
 
-        Ok(self.format_result(&matches))
+        Ok(self.format_result(matches))
     }
 }

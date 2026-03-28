@@ -13,7 +13,7 @@ use ursa_tools::{TodoManager, ToolRegistry};
 use crate::context::engine::ContextEngine;
 use crate::runtime::lane::{LANE_MAIN, LaneScheduler};
 use crate::runtime::session::{Session, SessionManager};
-use ursa_treesitter::symbol_index::SymbolIndex;
+use ursa_treesitter::symbol_index::SharedSymbolIndex;
 
 /// Maximum iterations for Fast mode ReAct loop
 const DEFAULT_MAX_ITERATIONS: usize = 50;
@@ -32,7 +32,7 @@ pub struct PipelineEngine {
     session_manager: Option<Arc<SessionManager>>,
     context_engine: Option<Arc<ContextEngine>>,
     lane_scheduler: Option<Arc<LaneScheduler>>,
-    symbol_index: Option<Arc<SymbolIndex>>,
+    symbol_index: Option<SharedSymbolIndex>,
 }
 
 impl PipelineEngine {
@@ -90,7 +90,7 @@ impl PipelineEngine {
         self
     }
 
-    pub fn with_symbol_index(mut self, index: Arc<SymbolIndex>) -> Self {
+    pub fn with_symbol_index(mut self, index: SharedSymbolIndex) -> Self {
         self.symbol_index = Some(index);
         self
     }
@@ -638,17 +638,19 @@ impl PipelineEngine {
 
         // Inject symbol index
         if let Some(ref index) = self.symbol_index {
-            let defs = index.all_definitions();
-            if !defs.is_empty() {
-                content.push_str("\n\n## Key Code Symbols\n");
-                for def in defs.iter().take(20) {
-                    content.push_str(&format!(
-                        "- {} `{}` ({}:{})\n",
-                        def.kind,
-                        def.name,
-                        def.file.file_name().unwrap_or_default().to_string_lossy(),
-                        def.line + 1
-                    ));
+            if let Ok(idx) = index.read() {
+                let defs = idx.all_definitions();
+                if !defs.is_empty() {
+                    content.push_str("\n\n## Key Code Symbols\n");
+                    for def in defs.iter().take(20) {
+                        content.push_str(&format!(
+                            "- {} `{}` ({}:{})\n",
+                            def.kind,
+                            def.name,
+                            def.file.file_name().unwrap_or_default().to_string_lossy(),
+                            def.line + 1
+                        ));
+                    }
                 }
             }
         }

@@ -3,11 +3,11 @@
 use crate::context::engine::ContextEngine;
 use crate::pipeline::gvrc::types::{ExecutionMode, Stage};
 use std::sync::Arc;
-use ursa_treesitter::symbol_index::SymbolIndex;
+use ursa_treesitter::symbol_index::SharedSymbolIndex;
 
 /// Context builder for GVRC stages.
 pub struct GvrcContextBuilder {
-    symbol_index: Option<Arc<SymbolIndex>>,
+    symbol_index: Option<SharedSymbolIndex>,
     context_engine: Option<Arc<ContextEngine>>,
 }
 
@@ -21,7 +21,7 @@ impl GvrcContextBuilder {
     }
 
     /// Set symbol index.
-    pub fn with_symbol_index(mut self, index: Arc<SymbolIndex>) -> Self {
+    pub fn with_symbol_index(mut self, index: SharedSymbolIndex) -> Self {
         self.symbol_index = Some(index);
         self
     }
@@ -88,7 +88,10 @@ impl GvrcContextBuilder {
     /// Find symbols relevant to the stage goal.
     fn find_relevant_symbols(&self, stage: &Stage) -> Vec<ursa_treesitter::scope_graph::Definition> {
         let index = match self.symbol_index {
-            Some(ref idx) => idx,
+            Some(ref idx) => match idx.read() {
+                Ok(guard) => guard,
+                Err(_) => return Vec::new(),
+            },
             None => return Vec::new(),
         };
 

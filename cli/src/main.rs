@@ -12,7 +12,10 @@ use ursa_core::pipeline::gvrc::ExecutionMode;
 use ursa_core::runtime::session::SessionManager;
 use ursa_services::memory::store::MemoryStore;
 use ursa_services::skills::manager::SkillsManager;
-use ursa_treesitter::symbol_index::SymbolIndex;
+use ursa_treesitter::symbol_index::{build_shared_index, SharedSymbolIndex, is_source_file};
+use std::sync::mpsc::channel;
+use std::thread;
+use notify::Watcher;
 
 use completion::create_editor;
 
@@ -134,7 +137,72 @@ async fn main() -> anyhow::Result<()> {
 
     // Build tool registry
     let todo_manager = Arc::new(Mutex::new(ursa_tools::TodoManager::new()));
-    let symbol_index = Arc::new(SymbolIndex::build(&cwd));
+    let symbol_index: SharedSymbolIndex = build_shared_index(&cwd);
+
+    // Start file watcher (background incremental updates)
+    let watcher_index = symbol_index.clone();
+    let watcher_root = cwd.clone();
+    thread::spawn(move || {
+        let (tx, rx) = channel();
+        let mut watcher = match notify::recommended_watcher({
+            let tx = tx.clone();
+            move |res: Result<notify::Event, notify::Error>| {
+                use notify::EventKind;
+                if let Ok(event) = res {
+                    match event.kind {
+                        EventKind::Modify(_) | EventKind::Create(_) => {
+                            for path in event.paths {
+                                if is_source_file(&path) {
+                                    let _ = tx.send((path, false));
+                                }
+                            }
+                        }
+                        EventKind::Remove(_) => {
+                            for path in event.paths {
+                                if is_source_file(&path) {
+                                    let _ = tx.send((path, true));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!("Failed to create file watcher: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&watcher_root, notify::RecursiveMode::Recursive) {
+            tracing::warn!("Failed to start file watcher: {}", e);
+            return;
+        }
+
+        tracing::info!("File watcher started for incremental indexing");
+
+        // Keep watcher alive
+        let _watcher = watcher;
+
+        for (path, is_remove) in rx {
+            if is_remove {
+                if let Ok(mut idx) = watcher_index.write() {
+                    idx.remove_file(&path);
+                    tracing::debug!("Removed from index: {:?}", path);
+                }
+            } else if let Ok(source) = std::fs::read_to_string(&path) {
+                if let Ok(mut idx) = watcher_index.write() {
+                    if let Err(e) = idx.update_file(&path, &source) {
+                        tracing::warn!("Failed to update index for {:?}: {}", path, e);
+                    } else {
+                        tracing::debug!("Incrementally updated: {:?}", path);
+                    }
+                }
+            }
+        }
+    });
 
     let mut registry = ursa_tools::ToolRegistry::with_defaults();
     registry.register(ursa_tools::TodoWriteTool::new(todo_manager.clone()));

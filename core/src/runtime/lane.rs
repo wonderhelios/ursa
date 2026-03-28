@@ -1,4 +1,4 @@
-// 命名通道调度器 (claw0 s10)
+// Named lane scheduler (claw0 s10)
 //! Named lane scheduler — concurrency control via named semaphores.
 //!
 //! Each lane is a named semaphore with a configurable concurrency limit.

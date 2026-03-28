@@ -1,4 +1,4 @@
-// SkillLoader - 从 Markdown 加载技能
+// SkillLoader - Load skills from Markdown
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
